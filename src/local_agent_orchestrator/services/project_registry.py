@@ -23,6 +23,7 @@ class Project:
     def to_dict(self) -> dict[str, object]:
         values = asdict(self)
         values["workspace_root"] = str(self.workspace_root)
+        values["path"] = str(self.workspace_root)
         values["test_command"] = list(self.test_command)
         values["runs_dir"] = str(self.runs_dir)
         values["analytics_dir"] = str(self.analytics_dir)

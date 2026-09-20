@@ -162,3 +162,20 @@ def test_unsupported_pause_is_not_reported_as_success(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_missing_application_run_is_not_reported_as_service_failure(tmp_path):
+    from local_agent_orchestrator.control_api import ControlAPI
+
+    class Service:
+        def get_run(self, run_id):
+            raise FileNotFoundError(f"Run not found: {run_id}")
+
+    api = ControlAPI(Service(), runs_dir=tmp_path / "runs")
+    try:
+        status, _, content = api.handle("GET", "/api/runs/missing", {})
+    finally:
+        api.close()
+
+    assert status == 404
+    assert b"NOT_FOUND" in content

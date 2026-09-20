@@ -172,6 +172,8 @@ class ControlAPI:
             return self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", "Endpoint not found")
         except ValueError as exc:
             return self._error(HTTPStatus.BAD_REQUEST, "INVALID_REQUEST", str(exc))
+        except FileNotFoundError as exc:
+            return self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", str(exc))
         except LookupError as exc:
             return self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", str(exc))
         except AttributeError as exc:

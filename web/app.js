@@ -21,12 +21,12 @@ async function refreshProjects() {
   select.replaceChildren(...(projects.data || projects).map((project) => {
     const option = document.createElement("option");
     option.value = project.id;
-    option.textContent = `${project.name} — ${project.path}`;
+    option.textContent = `${project.name} — ${project.workspace_root || project.path}`;
     return option;
   }));
   state.projectId = select.value || null;
   const project = (projects.data || projects).find((item) => item.id === state.projectId);
-  $("project-detail").textContent = project ? `${project.branch || "branch unknown"} · ${project.clean === false ? "dirty" : "clean"}` : "No project selected.";
+  $("project-detail").textContent = project ? (project.workspace_root || project.path || "Path unavailable") : "No project selected.";
 }
 
 async function refreshRuns() {
@@ -39,7 +39,7 @@ async function refreshRuns() {
     button.textContent = `${run.run_id || run.id} · ${run.status || "unknown"}`;
     button.onclick = () => selectRun(run.run_id || run.id);
     return button;
-  }) : [Object.assign(document.createElement("p"), { textContent: "No runs." })]);
+  }) : [Object.assign(document.createElement("p"), { textContent: "No runs." })]));
 }
 
 async function selectRun(runId) {
@@ -92,11 +92,16 @@ $("plan-form").onsubmit = async (event) => {
     state.planId = imported.id || imported.plan_id;
     const compiled = await request(`/plans/${encodeURIComponent(state.planId)}/compile`, { method: "POST" });
     $("plan-preview").textContent = JSON.stringify(compiled, null, 2);
-    $("start-run").disabled = !compiled.valid;
+    $("start-run").disabled = compiled.status !== "compiled" || Boolean(compiled.error);
   } catch (error) { showError(error); }
 };
 $("start-run").onclick = async () => {
-  try { const run = await request("/runs", { method: "POST", body: JSON.stringify({ project_id: selectedProject(), plan_id: state.planId }) }); state.runId = run.run_id || run.id; await refreshRuns(); await selectRun(state.runId); }
+  try {
+    const run = await request("/runs", { method: "POST", body: JSON.stringify({ project_id: selectedProject(), plan_id: state.planId }) });
+    const runId = run.run_id || run.id;
+    await refreshRuns();
+    if (runId) { state.runId = runId; await selectRun(runId); }
+  }
   catch (error) { showError(error); }
 };
 for (const [id, action] of [["resume-run", "resume"], ["pause-run", "pause"], ["cancel-run", "cancel"]]) {

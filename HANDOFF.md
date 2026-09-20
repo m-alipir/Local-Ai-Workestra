@@ -23,12 +23,12 @@ VPS resources, or another repository's main branch without explicit approval.
   project registry outside target workspaces, Markdown/Bonsai Plan Intake, and
   dependency-free static UI. The existing engine remains the only execution
   authority. Control focused/integration tests and full suite currently total
-  **255 passed** with the isolated Git test environment.
+  **260 passed** with the isolated Git test environment.
 - The Bonsai Plan Compiler keeps the strict JSON schema and now disables model
   thinking per request because the active xhigh server mode otherwise exhausts
   the 2,048-token output budget with private reasoning. Empty/non-text content
   remains fail-closed with bounded diagnostics and one retry. Repeated real
-  Markdown-to-Plan trials and final Control API/UI smoke `0045b35eee48` passed, including real
+  Markdown-to-Plan trials and final Control API/UI smoke `a4dbefc5e6d8` passed, including real
   retrospective finalization.
 - Pause/cancel are explicit unsupported responses until the synchronous engine
   gains a safe interruption primitive. Approval/resume and browser reconnect

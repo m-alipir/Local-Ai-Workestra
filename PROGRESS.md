@@ -21,10 +21,10 @@ Production deployment is **not** part of the current milestone.
 
 ## Current status
 
-**Unit baseline:** `255 passed`
+**Unit baseline:** `260 passed`
 
-**Control-layer integration baseline:** `255 passed` with the repository's isolated Git identity
-environment after Streams A–C, the static UI assets, and the Bonsai Plan Compiler reliability fix.
+**Control-layer integration baseline:** `260 passed` with the repository's isolated Git identity
+environment after the Control failure-path fixes.
 
 **Release-readiness verdict:** v1.0-ready candidate after the final audit. No runtime, safety,
 packaging, setup, CLI, compile, or cleanup blocker remains. This checkout's `master` branch is
@@ -53,7 +53,7 @@ Git validation followed by the existing structured security reviewer; reviewer f
 fail-closed. Bonsai Plan Intake may still reject underspecified Markdown with unresolved questions;
 bounded requests with explicit input behavior compile successfully in repeated live trials.
 
-**Latest Control smoke:** `0045b35eee48` passed with real Bonsai Markdown compilation, approval/SSE
+**Latest Control smoke:** `a4dbefc5e6d8` passed with real Bonsai Markdown compilation, approval/SSE
 resume, target-isolated verification, and real retrospective finalization. No commit was created in
 this checkout.
 
@@ -1191,3 +1191,33 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
 - Final compileall, `git diff --check`, and process cleanup checks passed after the scoped adapter
   compatibility adjustment; the full-finalization E2E left no model/control process and no commit
   was created.
+
+### 2026-09-21 — Workestra Control failure diagnosis
+- Reproduced the target baseline failure without changing AI-Assistant: the existing scheduler test
+  hardcodes `2026-09-15T07:30:00+03:00`, while the application lifespan recomputes the persisted
+  schedule from the current date (`2026-09-21`). The verifier parses the same single pytest
+  identity in baseline and post-change; this remains a pre-existing target failure and must stay
+  fail-closed/authoritatively classified rather than being fixed in the target.
+- Reproduced the Control contract bug: project serialization exposes `workspace_root`, while the
+  UI reads `project.path`, rendering `undefined`.
+- Reproduced the UI run-selection bug: asynchronous `POST /api/runs` returns `202 {status: accepted}`
+  before the synchronous engine has created a run ID; the UI immediately calls `/runs/undefined`,
+  which surfaces as a misleading Control service error. The fix must keep the accepted/background
+  lifecycle and show durable run state after it exists.
+- Focused baseline/Control/API/UI regressions after the narrow fixes passed: **24 tests**. The
+  baseline triage behavior remains unchanged and still rejects uninterpretable or dirty baselines.
+- Implemented the contract fixes: `Project.to_dict()` now includes a backward-compatible `path`
+  alias while the UI prefers `workspace_root`; the UI no longer dereferences an absent async run
+  ID; and `FileNotFoundError` maps to structured 404 instead of generic `Control service failed`.
+  Existing uncommitted UI syntax/compiled-state changes were preserved.
+- Expanded focused runtime/API/UI/verification coverage passed: **48 tests**, including dependency
+  failure propagation (`FAILED` → dependent `BLOCKED`, unrelated `SKIPPED`).
+- Full isolated suite passed: **260 tests** with `GIT_CONFIG_GLOBAL=/dev/null`.
+- `compileall -q src tests benchmarks`, browser JavaScript syntax check, and `git diff --check`
+  passed.
+- Full disposable Control E2E passed (`a4dbefc5e6d8`): API project response exposed the real path,
+  Markdown compiled with Bonsai, asynchronous run acceptance did not request an undefined run,
+  approval/SSE/resume completed, target-owned verification passed, retrospective finalization
+  completed, and all resources shut down cleanly.
+- Final compileall, Node syntax, diff, and process-cleanup checks passed. No commit was created;
+  AI-Assistant and production/VPS were untouched.

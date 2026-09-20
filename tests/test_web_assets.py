@@ -12,6 +12,9 @@ def test_control_ui_is_static_and_uses_control_api() -> None:
     assert 'request("/plans/import"' in javascript
     assert "/api/runs" in javascript
     assert "EventSource" in javascript
+    assert "project.workspace_root" in javascript
+    assert "const runId = run.run_id || run.id;" in javascript
+    assert "if (runId)" in javascript
     assert "shell" not in javascript.lower()
 
 
