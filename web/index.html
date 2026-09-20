@@ -13,6 +13,13 @@
         <h1>Workestra Control</h1>
         <p class="muted">Select a project, compile a plan, and observe the existing execution engine.</p>
         <p id="health" class="status">Connecting…</p>
+        <div id="error-banner" class="error" role="alert" hidden>
+          <strong id="error-summary"></strong>
+          <details>
+            <summary>Debug details</summary>
+            <pre id="error-details" class="output"></pre>
+          </details>
+        </div>
       </header>
 
       <section class="card" aria-labelledby="project-title">
@@ -33,8 +40,19 @@
       </section>
 
       <section class="card" aria-labelledby="plan-title">
-        <h2 id="plan-title">Plan intake</h2>
+        <div class="row between">
+          <h2 id="plan-title">Plan intake</h2>
+          <span id="plan-status" class="status">No plan selected</span>
+        </div>
         <p class="muted">Imported Markdown is untrusted. Compilation produces a preview only; it cannot run commands.</p>
+        <div class="row">
+          <label for="plan-history">Plans for this project
+            <select id="plan-history">
+              <option value="">No saved plans</option>
+            </select>
+          </label>
+          <button id="reuse-plan" type="button" disabled>Reuse selected plan</button>
+        </div>
         <form id="plan-form">
           <label for="plan-markdown">PLAN.md</label>
           <textarea id="plan-markdown" required placeholder="# Goal
@@ -66,6 +84,14 @@ Describe the work in plain Markdown…"></textarea>
           <pre id="timeline" class="output" aria-live="polite"></pre>
           <h3>Diff / results</h3>
           <pre id="run-artifacts" class="output"></pre>
+          <section id="diagnostics" class="diagnostics" aria-labelledby="diagnostics-title" hidden>
+            <h3 id="diagnostics-title">Diagnostics</h3>
+            <p id="diagnostic-summary" role="status"></p>
+            <details>
+              <summary>Raw run details</summary>
+              <pre id="diagnostic-details" class="output"></pre>
+            </details>
+          </section>
         </div>
       </section>
     </main>

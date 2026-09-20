@@ -44,8 +44,8 @@ class RunStateManager:
         state.updated_at = datetime.now(timezone.utc)
 
         path = self.get_run_dir(state.run_id) / "state.json"
-
-        path.write_text(
+        temporary = path.with_name(f".{path.name}.tmp")
+        temporary.write_text(
             json.dumps(
                 state.model_dump(mode="json"),
                 indent=2,
@@ -54,6 +54,7 @@ class RunStateManager:
             + "\n",
             encoding="utf-8",
         )
+        temporary.replace(path)
 
     def load(self, run_id: str) -> RunState:
         path = self.get_run_dir(run_id) / "state.json"

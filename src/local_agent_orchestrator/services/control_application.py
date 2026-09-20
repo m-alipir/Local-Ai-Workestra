@@ -26,6 +26,7 @@ from local_agent_orchestrator.services.resume import (
     resume_execution_plan,
 )
 from local_agent_orchestrator.services.run_state import RunStateManager
+from local_agent_orchestrator.services.run_diagnostics import collect_run_diagnostics
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -90,12 +91,11 @@ class ControlApplication:
         record = self._load_plan(plan_id)
         if record["project_id"] != project_id:
             raise ValueError("Plan does not belong to the selected project.")
-        plan_path = self.plans_dir / f"{plan_id}.json"
-        if not plan_path.is_file():
+        if record.get("status") != "compiled":
             raise RuntimeError("Plan must compile successfully before execution.")
-        plan = ExecutionPlan.model_validate_json(
-            plan_path.read_text(encoding="utf-8")
-        )
+        plan = self._read_compiled_plan(plan_id)
+        if plan is None:
+            raise RuntimeError("Plan must compile successfully before execution.")
         return self.start_run(project_id, plan)
 
     def start_run_request(self, payload: dict[str, object]) -> PlanRunResult:
@@ -120,41 +120,62 @@ class ControlApplication:
             "project_id": project_id,
             "markdown_path": str(markdown_path),
             "status": "imported",
+            "assumptions": [],
+            "unresolved_issues": [],
+            "error": None,
+            "compiled_path": None,
         }
-        (self.plans_dir / f"{plan_id}.record.json").write_text(
-            json.dumps(record, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._write_plan_record(record)
         return record
 
     def get_plan(self, plan_id: str) -> dict[str, object]:
-        record = self._load_plan(plan_id)
-        plan_path = self.plans_dir / f"{plan_id}.json"
-        result = dict(record)
-        result["compiled"] = plan_path.is_file()
-        if plan_path.is_file():
-            result["plan"] = ExecutionPlan.model_validate_json(
-                plan_path.read_text(encoding="utf-8")
-            ).model_dump(mode="json")
-        return result
+        return self._plan_view(self._load_plan(plan_id))
+
+    def list_plans(self, project_id: str | None = None) -> list[dict[str, object]]:
+        if project_id is not None:
+            self.get_project(project_id)
+        if not self.plans_dir.is_dir():
+            return []
+        plans = []
+        for path in sorted(self.plans_dir.glob("*.record.json")):
+            plan_id = path.name.removesuffix(".record.json")
+            record = self._load_plan(plan_id)
+            if project_id is None or record["project_id"] == project_id:
+                plans.append(self._plan_view(record))
+        return plans
 
     def compile_plan(
         self,
         plan_id: str,
-        _payload: dict[str, object] | None = None,
+        payload: dict[str, object] | None = None,
     ) -> PlanIntakeResult:
         record = self._load_plan(plan_id)
+        force = self._force_compile(payload)
+        if not force and record.get("status") == "compiled":
+            plan = self._read_compiled_plan(plan_id)
+            if plan is not None:
+                return PlanIntakeResult(
+                    status="compiled",
+                    plan=plan,
+                    assumptions=self._string_list(record.get("assumptions")),
+                )
         markdown_path = Path(str(record["markdown_path"])).resolve()
         if not self._inside(markdown_path, self.plans_dir):
             raise ValueError("Stored plan path escapes the control plan directory.")
         markdown = markdown_path.read_text(encoding="utf-8")
         result = compile_markdown_plan(markdown)
+        record.update({
+            "status": result.status,
+            "assumptions": list(result.assumptions),
+            "unresolved_issues": list(result.unresolved_issues),
+            "error": result.error,
+            "compiled_path": None,
+        })
         if result.status == "compiled" and result.plan is not None:
             self.plans_dir.mkdir(parents=True, exist_ok=True)
-            (self.plans_dir / f"{plan_id}.json").write_text(
-                result.plan.model_dump_json(indent=2) + "\n",
-                encoding="utf-8",
-            )
+            compiled_path = self._write_compiled_plan(plan_id, result.plan)
+            record["compiled_path"] = str(compiled_path)
+        self._write_plan_record(record)
         return result
 
     def list_runs(
@@ -188,6 +209,14 @@ class ControlApplication:
         project, state = self._find_run(run_id, project_id)
         del project
         return state
+
+    def get_run_diagnostics(
+        self,
+        run_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, object]:
+        project, _ = self._find_run(run_id, project_id)
+        return collect_run_diagnostics(self._run_dir(project, run_id))
 
     def approve_run(
         self,
@@ -324,6 +353,71 @@ class ControlApplication:
         )
         return result.stdout[:100_000] if result.returncode == 0 else None
 
+    def _plan_view(self, record: dict[str, object]) -> dict[str, object]:
+        plan_id = str(record["id"])
+        markdown_path = self._markdown_path(record)
+        plan = self._read_compiled_plan(plan_id)
+        result = dict(record)
+        result["markdown"] = markdown_path.read_text(encoding="utf-8")
+        result["compiled"] = record.get("status") == "compiled" and plan is not None
+        if result["compiled"] and plan is not None:
+            result["plan"] = plan.model_dump(mode="json")
+        return result
+
+    def _markdown_path(self, record: dict[str, object]) -> Path:
+        value = record.get("markdown_path")
+        if not isinstance(value, str) or not value:
+            raise RuntimeError("Invalid stored plan markdown path.")
+        path = Path(value).resolve()
+        if not self._inside(path, self.plans_dir):
+            raise ValueError("Stored plan path escapes the control plan directory.")
+        return path
+
+    def _read_compiled_plan(self, plan_id: str) -> ExecutionPlan | None:
+        path = (self.plans_dir / f"{plan_id}.json").resolve()
+        if not self._inside(path, self.plans_dir):
+            raise ValueError("Stored compiled plan path escapes the control plan directory.")
+        if not path.is_file():
+            return None
+        try:
+            return ExecutionPlan.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Invalid stored compiled plan: {plan_id}") from exc
+
+    def _write_compiled_plan(self, plan_id: str, plan: ExecutionPlan) -> Path:
+        path = (self.plans_dir / f"{plan_id}.json").resolve()
+        if not self._inside(path, self.plans_dir):
+            raise ValueError("Stored compiled plan path escapes the control plan directory.")
+        temporary = path.with_name(f".{path.name}.{token_hex(4)}.tmp")
+        temporary.write_text(plan.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+        return path
+
+    def _write_plan_record(self, record: dict[str, object]) -> None:
+        path = self.plans_dir / f"{record['id']}.record.json"
+        temporary = path.with_name(f".{path.name}.{token_hex(4)}.tmp")
+        temporary.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+
+    @staticmethod
+    def _force_compile(payload: dict[str, object] | None) -> bool:
+        if payload is None:
+            return False
+        if not isinstance(payload, dict):
+            raise ValueError("Compile request must be a JSON object.")
+        values = [payload[key] for key in ("force", "recompile") if key in payload]
+        if any(not isinstance(value, bool) for value in values):
+            raise ValueError("force and recompile must be booleans.")
+        if len(values) == 2 and values[0] != values[1]:
+            raise ValueError("force and recompile must agree.")
+        return any(values)
+
+    @staticmethod
+    def _string_list(value: object) -> list[str]:
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            return []
+        return list(value)
+
     def _find_run(
         self,
         run_id: str,
@@ -377,6 +471,8 @@ class ControlApplication:
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Invalid stored plan: {plan_id}") from exc
         if not isinstance(record, dict):
+            raise RuntimeError(f"Invalid stored plan: {plan_id}")
+        if record.get("id") != plan_id or not isinstance(record.get("project_id"), str):
             raise RuntimeError(f"Invalid stored plan: {plan_id}")
         return record
 

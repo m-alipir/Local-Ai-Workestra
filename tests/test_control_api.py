@@ -179,3 +179,36 @@ def test_missing_application_run_is_not_reported_as_service_failure(tmp_path):
 
     assert status == 404
     assert b"NOT_FOUND" in content
+
+
+def test_filesystem_service_exposes_structured_run_diagnostics(tmp_path):
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "state.json").write_text(
+        json.dumps({"run_id": "run-1", "status": "passed", "tasks": []}),
+        encoding="utf-8",
+    )
+    api = ControlAPI(runs_dir=tmp_path / "runs")
+    try:
+        status, _, content = api.handle("GET", "/api/runs/run-1/diagnostics", {})
+    finally:
+        api.close()
+    assert status == 200
+    assert json.loads(content)["failure_class"] == "none"
+
+
+def test_plan_list_routes_project_filter_to_application_service(tmp_path):
+    class Service:
+        def list_plans(self, project_id=None):
+            return [{"id": "plan-1", "project_id": project_id}]
+
+    api = ControlAPI(Service(), runs_dir=tmp_path / "runs")
+    try:
+        status, _, content = api.handle(
+            "GET", "/api/plans?project_id=project-1", {}
+        )
+    finally:
+        api.close()
+
+    assert status == 200
+    assert json.loads(content) == [{"id": "plan-1", "project_id": "project-1"}]

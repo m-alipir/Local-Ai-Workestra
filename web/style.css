@@ -17,8 +17,14 @@ textarea { width: 100%; min-height: 10rem; resize: vertical; margin: .5rem 0 1re
 button { background: #2563eb; color: white; cursor: pointer; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 .status, .badge { display: inline-block; padding: .2rem .55rem; border-radius: 999px; background: #374151; font-size: .85rem; }
+.error { margin-top: 1rem; padding: .8rem; border: 1px solid #f87171; border-radius: .45rem; background: #3f1d24; color: #fecaca; }
+.error details { margin-top: .6rem; }
+.error .output { margin-top: .6rem; color: #fecaca; }
 .list { display: grid; gap: .5rem; }
 .list button { text-align: left; background: #273449; }
 .detail { border-top: 1px solid #374151; margin-top: 1rem; padding-top: 1rem; }
+.diagnostics { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #374151; }
+.diagnostics p { margin: 0 0 .75rem; color: #fca5a5; }
 .output { white-space: pre-wrap; overflow: auto; max-height: 24rem; background: #111827; border-radius: .45rem; padding: .8rem; color: #d1d5db; }
 .task { border-left: .25rem solid #6b7280; padding: .5rem .75rem; background: #273449; }
+@media (max-width: 640px) { main { padding-top: 1rem; } .card { padding: 1rem; } }

@@ -211,6 +211,110 @@ def test_plan_record_cannot_read_markdown_outside_control_directory(tmp_path):
         app.compile_plan(str(imported["id"]))
 
 
+def test_compiled_plan_metadata_reuses_durable_result_after_restart(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry_path = tmp_path / "projects.json"
+    project = ProjectRegistry(registry_path).register("Demo", repo, ["pytest"])
+    app = ControlApplication(ProjectRegistry(registry_path))
+    imported = app.import_plan({
+        "project_id": project.id,
+        "markdown": "# Durable plan\n\nAdd the feature.\n",
+    })
+    compiled = PlanIntakeResult(
+        status="compiled",
+        assumptions=["The existing module is the integration point."],
+        plan=ExecutionPlan(
+            request="Add the feature",
+            tasks=[PlanTask(description="Implement the feature")],
+        ),
+    )
+
+    with patch(
+        "local_agent_orchestrator.services.control_application.compile_markdown_plan",
+        return_value=compiled,
+    ) as compiler:
+        assert app.compile_plan(str(imported["id"])) == compiled
+
+    record = json.loads(
+        (tmp_path / "plans" / f"{imported['id']}.record.json").read_text()
+    )
+    assert record["status"] == "compiled"
+    assert record["assumptions"] == compiled.assumptions
+    assert record["unresolved_issues"] == []
+    assert record["error"] is None
+    assert record["compiled_path"] == str(tmp_path / "plans" / f"{imported['id']}.json")
+
+    restarted = ControlApplication(ProjectRegistry(registry_path))
+    with patch(
+        "local_agent_orchestrator.services.control_application.compile_markdown_plan",
+        side_effect=AssertionError("durable compiled plan should be reused"),
+    ):
+        restored = restarted.compile_plan(str(imported["id"]))
+
+    assert restored.status == "compiled"
+    assert restored.assumptions == compiled.assumptions
+    assert restored.plan == compiled.plan
+    assert compiler.call_count == 1
+    listed = restarted.list_plans(project.id)
+    assert listed[0]["id"] == imported["id"]
+    assert listed[0]["status"] == "compiled"
+    assert listed[0]["markdown"] == "# Durable plan\n\nAdd the feature.\n"
+    assert listed[0]["plan"] == compiled.plan.model_dump(mode="json")
+
+
+def test_plan_compile_failure_metadata_persists_and_force_recompiles(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry_path = tmp_path / "projects.json"
+    app = ControlApplication(ProjectRegistry(registry_path))
+    project = app.create_project("Demo", repo, ["pytest"])
+    imported = app.import_plan({"project_id": project.id, "markdown": "# Plan"})
+    failed = PlanIntakeResult(
+        status="failed",
+        assumptions=["The target module exists."],
+        unresolved_issues=["The acceptance condition is ambiguous."],
+        error="compiler unavailable",
+    )
+    compiled = PlanIntakeResult(
+        status="compiled",
+        plan=ExecutionPlan(
+            request="Plan",
+            tasks=[PlanTask(description="Implement the plan")],
+        ),
+    )
+    with patch(
+        "local_agent_orchestrator.services.control_application.compile_markdown_plan",
+        side_effect=[failed, compiled],
+    ) as compiler:
+        assert app.compile_plan(str(imported["id"])) == failed
+        assert app.compile_plan(str(imported["id"]), {"force": True}) == compiled
+
+    restored = ControlApplication(ProjectRegistry(registry_path)).get_plan(
+        str(imported["id"])
+    )
+    assert restored["status"] == "compiled"
+    assert restored["assumptions"] == []
+    assert restored["unresolved_issues"] == []
+    assert restored["error"] is None
+    assert compiler.call_count == 2
+
+
+def test_list_plans_filters_by_project_and_rejects_unknown_project(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry_path = tmp_path / "projects.json"
+    app = ControlApplication(ProjectRegistry(registry_path))
+    first = app.create_project("First", repo, ["pytest"])
+    second = app.create_project("Second", repo, ["pytest"])
+    imported = app.import_plan({"project_id": first.id, "markdown": "# First"})
+    app.import_plan({"project_id": second.id, "markdown": "# Second"})
+
+    assert [item["id"] for item in app.list_plans(first.id)] == [imported["id"]]
+    with pytest.raises(KeyError, match="Project not found"):
+        app.list_plans("missing")
+
+
 def test_read_diff_derives_committed_diff_from_authoritative_metrics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

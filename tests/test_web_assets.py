@@ -9,12 +9,20 @@ def test_control_ui_is_static_and_uses_control_api() -> None:
     javascript = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
 
     assert "Workestra Control" in html
+    assert "plan-history" in html
+    assert "diagnostics" in html
+    assert "<details" in html
     assert 'request("/plans/import"' in javascript
     assert "/api/runs" in javascript
+    assert "/plans?project_id=" in javascript
+    assert "/diagnostics" in javascript
     assert "EventSource" in javascript
+    assert "localStorage" in javascript
+    assert "project_id=" in javascript
     assert "project.workspace_root" in javascript
     assert "const runId = run.run_id || run.id;" in javascript
     assert "if (runId)" in javascript
+    assert "error-details" in javascript
     assert "shell" not in javascript.lower()
 
 

@@ -1221,3 +1221,23 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
   completed, and all resources shut down cleanly.
 - Final compileall, Node syntax, diff, and process-cleanup checks passed. No commit was created;
   AI-Assistant and production/VPS were untouched.
+# 2026-09-21 — Control persistence/diagnostics milestone started
+
+- Inspected durable artifacts before implementation. Historical failed runs (including `af1230bb15f4`, `2272d141591f`, `4b298112f7ca`) retain task errors, model/operation failures, and trajectory events; successful run `7120a13568ea` retains baseline/post identities and checkpoint data.
+- The current Control application already stores Markdown and compiled plans, but plan records only retain `status=imported` and the UI has no plan history or diagnostics endpoint.
+- Work is split into persistence/history, deterministic failed-run diagnostics, and UI/regression tests. Existing execution, rollback, verification, and environment safety remain unchanged.
+- Initial focused test attempt is blocked during collection because the diagnostics regression test landed before its implementation module; no production behavior was changed by this failed check.
+- Persistence and diagnostics integration is implemented. Plan records now retain compile metadata and compiled JSON; list/compile APIs reuse stored plans unless `force`/`recompile` is explicitly requested. Failed-run diagnostics are deterministic, bounded, and read only durable state/trajectory/metrics/artifacts.
+- The UI now retrieves plans from the server after project selection, retains browser cache only as a convenience, exposes plan history/reuse, and fetches `/api/runs/{id}/diagnostics` with raw details behind `<details>`.
+- Focused Control/persistence/diagnostics/web tests: **24 passed**.
+- Full suite first run: **265 passed, 1 failed**. The only failure was the existing fallback-identity test reading the host's global Git identity; no repository code was changed for it because the test's intended isolated environment has no global identity. Subsequent full validation will use `GIT_CONFIG_GLOBAL=/dev/null`, without mutating user or target repositories.
+- Focused regression suite including Git fallback: **31 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
+- Full isolated suite: **266 passed**. `compileall`, `node --check web/app.js`, and `git diff --check` passed.
+- The first disposable persistence/retry E2E harness attempt stalled because it did not start the loopback server thread; no repository or target state was changed. The harness is being corrected to use `serve_forever` and explicit shutdown/restart.
+- Focused diagnostics/persistence/API/UI regression tests after preserving unlabelled verifier output: **25 passed**.
+- Disposable E2E exposed and fixed a state-publication race: `/api/runs` could observe a partially written `state.json` during async startup. `RunStateManager.save` now atomically replaces state files. Focused state/control/diagnostics tests: **32 passed**.
+- The next E2E attempt reached failure diagnostics correctly; its assertion incorrectly treated the previous failed run as the second run while the new async run was still being created. The product path remained correct; the harness now waits for a distinct run ID.
+- Disposable Control E2E passed: imported/compiled Markdown, restarted the application/API, reused the persisted compiled plan without recompilation (`compiler_calls=1`), ran an intentional verifier failure, exposed `task_failure` diagnostics including raw verifier text, then started a distinct retry run that passed. Run IDs: failed `c915bff7603d`, successful `5fcba72a7be1`.
+- The default filesystem Control adapter now exposes the same diagnostics contract. Focused API/persistence/diagnostics/UI tests: **26 passed**.
+- Final validation: **268 passed** under `GIT_CONFIG_GLOBAL=/dev/null`; `compileall`, `node --check web/app.js`, and `git diff --check` passed again. No AI-Assistant or production/VPS files were touched.
+- Remaining limitation: browser localStorage is only a convenience cache; the authoritative plan history is the Control service's filesystem records. Diagnostics are deterministic and bounded; they do not infer causes beyond recorded state/trajectory/metrics/artifacts, and raw details remain available behind the UI disclosure panel.

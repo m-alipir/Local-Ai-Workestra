@@ -37,7 +37,11 @@ class ControlService(Protocol):
 
     def list_runs(self, **filters: Any) -> Any: ...
 
+    def list_plans(self, project_id: str | None = None) -> Any: ...
+
     def get_run(self, run_id: str) -> Any: ...
+
+    def get_run_diagnostics(self, run_id: str) -> Any: ...
 
     def read_events(self, run_id: str, after_id: int = 0) -> Any: ...
 
@@ -56,6 +60,9 @@ class FilesystemControlService:
     def list_projects(self) -> list[dict[str, Any]]:
         return []
 
+    def list_plans(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        return []
+
     def list_runs(self, **_: Any) -> list[dict[str, Any]]:
         return [
             self.get_run(path.name)
@@ -68,6 +75,11 @@ class FilesystemControlService:
         if not path.is_file():
             raise LookupError(f"Run not found: {run_id}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_run_diagnostics(self, run_id: str) -> dict[str, Any]:
+        from local_agent_orchestrator.services.run_diagnostics import collect_run_diagnostics
+
+        return collect_run_diagnostics(self._run_path(run_id))
 
     def read_events(self, run_id: str, after_id: int = 0) -> list[dict[str, Any]]:
         path = self._run_path(run_id) / "trajectory.jsonl"
@@ -131,12 +143,18 @@ class ControlAPI:
                 return self._json(HTTPStatus.OK, self._call("list_projects"))
             if method == "GET" and len(path) == 3 and path[:2] == ("api", "projects"):
                 return self._json(HTTPStatus.OK, self._call("get_project", path[2]))
+            if method == "GET" and len(path) == 4 and path[:2] == ("api", "projects") and path[3] == "plans":
+                return self._json(HTTPStatus.OK, self._call("list_plans", project_id=path[2]))
+            if method == "GET" and path == ("api", "plans"):
+                return self._json(HTTPStatus.OK, self._call("list_plans", project_id=query.get("project_id")))
             if method == "GET" and len(path) == 3 and path[:2] == ("api", "plans"):
                 return self._json(HTTPStatus.OK, self._call("get_plan", path[2]))
             if method == "GET" and path == ("api", "runs"):
                 return self._json(HTTPStatus.OK, self._call("list_runs", **query))
             if method == "GET" and len(path) == 3 and path[:2] == ("api", "runs"):
                 return self._json(HTTPStatus.OK, self._call("get_run", path[2]))
+            if method == "GET" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] == "diagnostics":
+                return self._json(HTTPStatus.OK, self._call("get_run_diagnostics", path[2]))
             if method == "GET" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] == "artifacts":
                 return self._json(HTTPStatus.OK, self._call("read_artifacts", path[2]))
             if method == "GET" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] == "diff":
