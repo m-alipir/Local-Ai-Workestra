@@ -5,6 +5,7 @@ from local_agent_orchestrator.services.security import (
     requires_security_review,
     run_security_review,
 )
+from local_agent_orchestrator.core.config import load_models
 
 
 def test_security_trigger_detects_sensitive_task():
@@ -43,7 +44,7 @@ def test_run_security_review(tmp_path):
     with patch(
         "local_agent_orchestrator.services.security.SecurityReviewer",
         return_value=fake_reviewer,
-    ):
+    ) as reviewer_class:
         result = run_security_review(
             task="Add API auth",
             changed_files=["auth.py"],
@@ -52,6 +53,7 @@ def test_run_security_review(tmp_path):
 
     assert result.findings == []
     assert result.has_blocking_findings is False
+    assert reviewer_class.call_args.kwargs["model"] == load_models().models["gpt_oss"]
 
 
 def test_run_security_review_can_inspect_committed_revision(tmp_path):

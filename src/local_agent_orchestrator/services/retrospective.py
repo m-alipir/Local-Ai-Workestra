@@ -329,8 +329,10 @@ def generate_retrospective(
         ensure_ascii=False,
     )
 
+    # The existing retrospective interface is model-agnostic; active routing
+    # supplies Bonsai 2 through the trusted model configuration.
     reviewer = NemotronRetrospective(
-        model=models.models["nemotron"],
+        model=models.models["bonsai2"],
         minimum_free_ram_gb=settings.resources.minimum_free_ram_gb,
         minimum_free_vram_gb=settings.resources.minimum_free_vram_gb,
         start_timeout=settings.orchestrator.model_start_timeout,

@@ -1,0 +1,1 @@
+"""Disposable coding-model benchmark."""

@@ -1,6 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
+from local_agent_orchestrator.core.config import load_models
 from local_agent_orchestrator.services.analytics import append_run_analytics
 from local_agent_orchestrator.services.retrospective import (
     build_retrospective_context,
@@ -102,11 +103,12 @@ def test_generate_retrospective(tmp_path):
     with patch(
         "local_agent_orchestrator.services.retrospective.NemotronRetrospective",
         return_value=fake,
-    ):
+    ) as retrospective_class:
         path = generate_retrospective(tmp_path)
 
     assert path.exists()
     assert "STRONG:" in path.read_text()
+    assert retrospective_class.call_args.kwargs["model"] == load_models().models["bonsai2"]
 
 
 def test_successful_clean_run_does_not_invent_failure(tmp_path):

@@ -16,6 +16,12 @@ def test_base_url():
     assert server.base_url == "http://127.0.0.1:9000"
 
 
+def test_high_reasoning_maps_to_xhigh_effort():
+    server = LlamaServer(hf_model="test/model", reasoning="high")
+
+    assert server._reasoning_args()[-1] == "xhigh"
+
+
 def test_chat_returns_content():
     server = LlamaServer(hf_model="test/model")
 
@@ -137,6 +143,59 @@ def test_start_cleans_baseline_when_spawn_fails(
     )
     assert server.process is None
     assert server._baseline_resources is None
+
+
+def test_start_uses_local_model_and_flash_attention(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.undo()
+    binary = tmp_path / "llama-server"
+    model = tmp_path / "model.gguf"
+    binary.touch()
+    model.touch()
+    process = MagicMock()
+    process.poll.return_value = None
+    server = LlamaServer(
+        hf_model="unused/model",
+        binary=binary,
+        model_path=model,
+        flash_attention=True,
+    )
+    baseline = ResourceSnapshot(
+        available_ram_gb=8.0,
+        llama_processes=[],
+        vram_total_gb=16.0,
+        vram_used_gb=2.0,
+        vram_free_gb=14.0,
+    )
+    response = MagicMock(status_code=200)
+
+    with (
+        patch(
+            "local_agent_orchestrator.adapters.llama_server.assert_safe_to_start_model",
+            return_value=baseline,
+        ),
+        patch(
+            "local_agent_orchestrator.adapters.llama_server.subprocess.Popen",
+            return_value=process,
+        ) as popen,
+        patch(
+            "local_agent_orchestrator.adapters.llama_server.httpx.get",
+            return_value=response,
+        ),
+        patch(
+            "local_agent_orchestrator.adapters.llama_server.wait_for_model_release"
+        ),
+    ):
+        server.start()
+        server.stop()
+
+    command = popen.call_args.args[0]
+    assert command[:3] == [str(binary), "-m", str(model)]
+    assert command[3:5] == ["-ngl", "99"]
+    assert "-fa" in command
+    assert command[command.index("-fa") + 1] == "on"
 
 
 def test_context_manager_stops_after_body_failure():

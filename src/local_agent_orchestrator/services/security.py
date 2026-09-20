@@ -156,7 +156,7 @@ def run_security_review(
         if workspace.exists(path):
             files[path] = workspace.read_text(path)
 
-    model = models.models["qwen_general"]
+    model = models.models["gpt_oss"]
 
     reviewer = SecurityReviewer(
         model=model,

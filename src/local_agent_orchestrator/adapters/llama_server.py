@@ -24,6 +24,8 @@ class LlamaServer:
         context: int = 8192,
         port: int = 8080,
         binary: str | Path = "~/llama.cpp/build/bin/llama-server",
+        model_path: str | Path | None = None,
+        flash_attention: bool = False,
         minimum_free_ram_gb: float = 2.0,
         minimum_free_vram_gb: float = 1.0,
         start_timeout: int = 120,
@@ -34,6 +36,10 @@ class LlamaServer:
         self.context = context
         self.port = port
         self.binary = Path(binary).expanduser()
+        self.model_path = (
+            Path(model_path).expanduser() if model_path is not None else None
+        )
+        self.flash_attention = flash_attention
         self.minimum_free_ram_gb = minimum_free_ram_gb
         self.minimum_free_vram_gb = minimum_free_vram_gb
         self.start_timeout = start_timeout
@@ -89,18 +95,29 @@ class LlamaServer:
                 raise LlamaServerError(
                     f"llama-server binary not found: {self.binary}"
                 )
+            if self.model_path is not None and not self.model_path.exists():
+                raise LlamaServerError(
+                    f"local model not found: {self.model_path}"
+                )
 
             command = [
                 str(self.binary),
-                "-hf",
-                self.hf_model,
+            ]
+            if self.model_path is None:
+                command.extend(["-hf", self.hf_model])
+            else:
+                command.extend(["-m", str(self.model_path)])
+
+            command.extend([
                 "-ngl",
                 "99",
                 "-c",
                 str(self.context),
                 "--port",
                 str(self.port),
-            ]
+            ])
+            if self.flash_attention:
+                command.extend(["-fa", "on"])
 
             command.extend(
                 self._reasoning_args()

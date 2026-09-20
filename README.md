@@ -33,10 +33,10 @@ The last command is a read-only resource health check. Configuration paths in
 the CLI from this repository root unless you provide an equivalent layout.
 
 The shipped configuration is in `config/settings.yaml` and
-`config/models.yaml`. It requires all five configured model entries. The
-default model server path is currently code-configured; change the
-`LlamaServer` construction or package configuration before using a different
-binary path.
+`config/models.yaml`. It requires four active model entries. Bonsai 2 uses the
+configured ROCm binary and local GGUF path; both files must already exist on
+the machine. Model files are never deleted by the orchestrator. The default
+model server path for other models remains code-configured.
 
 ## Commands
 
@@ -111,15 +111,20 @@ checkpoint.
 
 ## Model routing
 
-The five entries in `config/models.yaml` are routed as follows:
+The four active entries in `config/models.yaml` are routed as follows:
 
 | Entry | Hugging Face model | Role | Reasoning |
 | --- | --- | --- | --- |
 | `qwen_coder` | `tensorblock/Qwen_Qwen3-Coder-30B-A3B-Instruct-GGUF:Q3_K_M` | Explorer and primary coder | `none` |
 | `gpt_oss` | `ggml-org/gpt-oss-20b-GGUF:MXFP4` | Diagnosis, review, optimization | `low` |
-| `qwen_general` | `bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ4_XS` | Security/design review | `medium_high` |
+| `bonsai2` | `Ternary-Bonsai-2-27B-PQ2_0.gguf` via the configured ROCm server | Deep reasoning, architecture/design review, retrospective | `high` (`xhigh`) |
 | `devstral` | `bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M` | Fallback engineer | `medium` |
-| `nemotron` | `bartowski/nvidia_NVIDIA-Nemotron-Nano-12B-v2-GGUF:Q6_K` | Retrospective only | `low` |
+
+GPT-OSS is the primary security reviewer. Qwen3-30B-A3B general and Nemotron
+Nano 12B v2 are no longer active routes; their model files may remain on disk
+for historical benchmark replay. Qwen3.8 OBLITERATED is experimentally
+unsupported and too slow on the current RX 9070 + llama.cpp ROCm setup, so it
+is not configured.
 
 Reasoning maps to llama.cpp as `none` → off, `low` → low, `medium` → medium,
 `medium_high` → high, and `high` → xhigh. Models run sequentially and the

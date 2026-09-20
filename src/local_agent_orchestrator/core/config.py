@@ -9,9 +9,8 @@ REQUIRED_MODEL_ENTRIES = frozenset(
     {
         "qwen_coder",
         "gpt_oss",
-        "qwen_general",
+        "bonsai2",
         "devstral",
-        "nemotron",
     }
 )
 

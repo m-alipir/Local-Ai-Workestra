@@ -7,7 +7,7 @@ VPS resources, or another repository's main branch without explicit approval.
 
 ## Verified v1.0 state
 
-- Unit suite after the release audit: **199 passed**; compileall and offline package build pass.
+- Unit suite after the fleet routing update: **217 passed** with the repository's isolated Git test environment; compileall passes.
 - Plan v2 dependency ordering, task dispatch, approval, resume, verification
   metadata, rollback, checkpointing, and review behavior are deterministic.
 - Semantic operations are schema-constrained and exact-match; path grounding,
@@ -42,9 +42,13 @@ Models run one at a time through `LlamaServer` context managers:
 |---|---|---|
 | `qwen_coder` | explorer and primary coder | none |
 | `gpt_oss` | diagnosis/review/optimization | low |
-| `qwen_general` | security/design review | medium_high |
+| `bonsai2` | deep reasoning, architecture/design review, retrospective | high (`xhigh`) |
 | `devstral` | fallback engineer | medium |
-| `nemotron` | retrospective only | low |
+
+GPT-OSS is the primary security reviewer. Qwen3-30B-A3B general and Nemotron
+Nano 12B v2 are benchmark-history-only model IDs and are absent from active
+configuration. Qwen3.8 OBLITERATED is experimentally unsupported/too slow on
+the current RX 9070 + llama.cpp ROCm setup and is not routed.
 
 The exact model IDs and defaults live in `config/models.yaml` and
 `config/settings.yaml`. See `README.md` for setup, command examples, supported

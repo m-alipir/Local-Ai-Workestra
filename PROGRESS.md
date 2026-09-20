@@ -21,7 +21,7 @@ Production deployment is **not** part of the current milestone.
 
 ## Current status
 
-**Unit baseline:** `199 passed`
+**Unit baseline:** `217 passed`
 
 **Release-readiness verdict:** v1.0-ready candidate after the final audit. No runtime, safety,
 packaging, setup, CLI, compile, or cleanup blocker remains. This checkout's `master` branch is
@@ -34,6 +34,12 @@ failed, 6 skipped`; post-change verification reported `308 passed, 1 failed, 6 s
 same structured scheduler failure classified as `preexisting_failures_only`. Qwen produced the
 accepted grounded URL-normalization edit on attempt 1 and checkpoint `b89066d5345eab7c26d45c90b6e777b3c9e5b543`
 on the isolated `agent/b3357f033b28` branch. `main` remains unchanged.
+
+**Post-routing smoke:** the active four-model fleet passed disposable startup/cleanup, Qwen primary
+coding, GPT-OSS security review, Bonsai retrospective, and a minimal Devstral fallback coding task.
+Devstral's separate two-file fallback scenario emitted duplicate operations and was rejected before
+write as `invalid_operation`; this remains a controlled model-quality limitation, not a safety or
+routing failure.
 
 **Next limitations (non-blocking):** the target's time-sensitive scheduler test remains a
 pre-existing failure; baseline triage records and safely permits it when no new failure identity
@@ -183,9 +189,13 @@ request (11546 tokens) exceeds the available context size (8192 tokens)
 |---|---|---|
 | Qwen3-Coder 30B-A3B Q3_K_M | primary coder + repo explorer | none |
 | GPT-OSS-20B MXFP4 | diagnosis/review/optimization | low |
-| Qwen3-30B-A3B IQ4_XS | security/design review | medium_high |
+| Bonsai 2 27B PQ2_0 via ROCm | deep reasoning, architecture/design review, retrospective | high (`xhigh`) |
 | Devstral Small 2 24B Q4_K_M | fallback coder | medium |
-| Nemotron Nano 12B v2 Q6_K | retrospective only | low |
+
+GPT-OSS is the primary security reviewer. Qwen3-30B-A3B general and Nemotron
+Nano 12B v2 are retained only in benchmark-history aliases, not active routing.
+Qwen3.8 OBLITERATED is experimentally unsupported/too slow on the current RX
+9070 + llama.cpp ROCm setup and is not configured.
 
 Reasoning mapping:
 - none -> off
@@ -973,3 +983,108 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
   `git show --stat --oneline v1.0.0` and `git status --short`.
 - Next milestone: maintainer release staging/tagging, followed by only demonstrated reliability
   work (no speculative feature expansion).
+
+### 2026-09-20 — disposable security-review benchmark
+- Added an isolated `benchmarks/security_review/` harness with five temporary Git fixtures covering
+  command injection, path traversal, secret exposure, a combined shell/path boundary, and a clean
+  control. It invokes the existing `services.security.run_security_review` interface; production
+  routing and AI-Assistant are unchanged. Selected configured models are remapped only inside the
+  benchmark process to the service's existing default slot.
+- The runner records expected/detected categories, misses, false positives, finding titles,
+  per-case latency, and controlled model/server errors. Focused benchmark tests: **5 passed**.
+- Real local-model benchmark results: `qwen_general` completed all five cases with 4/5 category
+  cases correct, no false positives, and one missed `path_traversal` in the combined boundary;
+  per-case latency was **60.9–67.3s**. `gpt_oss` completed all five with all expected categories,
+  no false positives, and **4.9–41.3s** per case. `devstral` detected the three standalone
+  vulnerabilities, missed the combined case's `path_traversal`, and raised an unclassified finding
+  on the clean control; its latency was **23.8–53.8s** per case.
+- The first evaluator pass exposed that unmatched model findings were being dropped. Added an
+  `unclassified` category so clean-control false positives remain visible. Focused benchmark tests
+  remained **5 passed**; the devstral clean-control rerun recorded one `unclassified` false
+  positive at **36.0s**.
+- Full orchestrator suite after adding the benchmark: **204 passed**. Benchmark sources compiled
+  successfully, and the final process scan found no lingering llama-server or benchmark process.
+- Benchmark CLI help was verified; temporary JSON reports remain under `/tmp` only and no generated
+  benchmark output was added to the repository.
+- Aggregated report `/tmp/security-review-benchmark.json` contains 15 model/case rows: expected
+  categories were 5 per model; `gpt_oss` matched 5/5 with 0 false positives, while `qwen_general`
+  and `devstral` each matched 4/5. `devstral` recorded one clean-control `unclassified` false
+  positive; latency ranges were qwen **60.9–67.3s**, GPT-OSS **4.9–41.3s**, and Devstral
+  **28.9–53.8s**.
+
+### 2026-09-20 — Bonsai benchmark adapter design
+- Inspected the existing security-review path: the benchmark calls `services.security.run_security_review`, which constructs the normal `SecurityReviewer` and `LlamaServer`; production routing currently selects `qwen_general`.
+- The Bonsai ROCm binary supports local `-m/--model`, full offload via the existing `-ngl 99`, and Flash Attention via `-fa on`. The smallest safe integration is optional `LlamaServer` adapter arguments for a local model path and Flash Attention, with defaults preserving the existing `-hf` command; the benchmark will patch only the reviewer’s server symbol for `bonsai2`.
+- No production model config or routing change is planned. Benchmark fixtures and expected results remain unchanged.
+- Added optional local-model/Flash Attention support to `LlamaServer`: local paths use `-m`, optional Flash Attention uses `-fa on`, and full GPU offload remains the existing `-ngl 99`; default Hugging Face startup is unchanged.
+- Added a benchmark-only `bonsai2` alias that patches only the security reviewer’s server constructor to the supplied ROCm binary/model. Production routing/configuration is unchanged.
+- Focused adapter and benchmark tests: **14 passed**. The adapter test asserts local `-m`, `-ngl 99`, and `-fa on` command construction.
+- Full orchestrator suite after the Bonsai adapter/alias changes: **206 passed**; source and benchmark compileall passed.
+- Bonsai preflight passed: the supplied ROCm binary is executable (16,000 bytes), the supplied PQ2_0 GGUF exists (7,206,168,928 bytes), `--help` confirms `-fa/--flash-attn [on|off|auto]`, and no existing `llama-server` process was present before launch.
+- Initial Bonsai five-case launch reached the ROCm server but all reviews failed closed with HTTP 500 before model output: the selected security model carried `medium_high`, and the shared mapping emitted `--reasoning-effort high`; Bonsai's template accepts only `low`, `medium`, and `xhigh`. No detections were counted from these errors. This is a benchmark-only reasoning compatibility issue; no safety or routing behavior was weakened.
+- The initial run exited cleanly; a follow-up process check found no lingering `llama-server` or benchmark process.
+- Focused regression after the Bonsai reasoning compatibility fix: **15 passed**. The benchmark now maps only Bonsai's selected config to the existing `high → xhigh` adapter level; other model configs and production routing remain unchanged.
+- Corrected Bonsai run across the unchanged five fixtures completed with the supplied ROCm binary, local PQ2_0 model, `-ngl 99`, Flash Attention `-fa on`, and `xhigh` reasoning effort. It detected all five expected vulnerability categories: command injection, path traversal, and secret exposure standalone; both command injection and path traversal in the combined case. No category misses or false positives occurred.
+- The clean-control case returned no JSON object after **45.1s** and was recorded as a controlled reviewer error (expected empty findings, no inferred detection). Other Bonsai latencies were **7.3–19.9s**; all five cases completed in **96.3s** total. No model or benchmark process remained afterward.
+- Updated the benchmark README with the Bonsai-only alias and exact ROCm/local-model flags. Aggregated `/tmp/security-review-benchmark.json` now contains 20 rows for `gpt_oss`, `qwen_general`, `devstral`, and `bonsai2`.
+- Four-model aggregate: Bonsai **5/5 expected categories, 0 misses, 0 false positives, 1 clean-control parse error, 7.3–45.1s**; GPT-OSS **5/5, 0 misses, 0 false positives, 4.9–41.3s**; Qwen general **4/5, 1 miss, 0 false positives, 60.9–67.3s**; Devstral **4/5, 1 miss, 1 false positive, 28.9–53.8s**.
+- Final validation after Bonsai integration: focused adapter/benchmark tests **15 passed**, full orchestrator suite **207 passed**, and `uv run python -m compileall -q src benchmarks/security_review` passed. `git status` shows only intended PROGRESS, adapter/test, and benchmark files; generated reports remain in `/tmp` and no generated files are in the benchmark tree.
+
+### 2026-09-20 — retrospective benchmark design
+- Inspected `build_retrospective_context()` and `NemotronRetrospective.run()`, plus stored run `7120a13568ea`. The same compact authoritative JSON context will be supplied to both models; lower-authority commentary remains included but is not treated as fact.
+- The benchmark will be isolated under `benchmarks/retrospective/`, use the existing `NemotronRetrospective` interface, and patch only its server constructor for Bonsai's ROCm binary/local GGUF with full offload and Flash Attention. Production routing and the normal retrospective service remain unchanged.
+- Scoring will report deterministic evidence checks: section/output parse validity, baseline-failure attribution, supported versus unsupported claims, evidence-aligned root-cause usefulness, actionable suggestions, and latency. It will not infer a concrete root cause absent from the stored authoritative evidence.
+- Added `benchmarks/retrospective/`, a disposable harness that calls the existing `NemotronRetrospective.run()` interface for `nemotron` and benchmark-only `bonsai2` on one identical `build_retrospective_context()` JSON input. It records a context digest, raw output, latency, section validity, grounded facts, unsupported claims/suggestions, and evidence-aligned root-cause status.
+- Focused retrospective benchmark tests: **4 passed**. Tests cover grounded baseline-aware output, baseline hallucination/routing claims, malformed sections, and identical model input.
+- Real comparison on `7120a13568ea` completed for both models with identical context SHA-256 `3a414c0fb91aaecb6e861b06aee34ede820bf4db059a4a67d47db4e892b74771`: Nemotron latency **49.9s**, Bonsai latency **45.2s**, both produced valid five-section output and no model-call errors.
+- First evaluator pass conservatively marked Nemotron's recommendation to address the scheduler failure in a “dedicated task” as unsupported. The output explicitly framed it as unrelated pre-existing debt, so the evaluator must distinguish a separately scoped debt suggestion from an agent-task recommendation before final scoring.
+- Focused tests after the evidence-aware evaluator correction: **4 passed**. Separate/debt-tracking recommendations are accepted only when explicitly framed as a dedicated/separate task; agent-task remediation remains unsupported.
+- Replayed the stored model outputs with the corrected evaluator (no model rerun): both Nemotron and Bonsai are now `grounded`, have no unsupported claims or suggestions, give evidence-aligned baseline attribution with the concrete underlying cause remaining unknown, and recommend only separate tracking of the baseline debt. Bonsai grounded 5 recorded facts versus Nemotron 3; both outputs were well-formed.
+- Final validation after the retrospective benchmark: full orchestrator suite **211 passed**, `uv run python -m compileall -q src benchmarks` passed, `git diff --check` passed, and no `llama-server` or retrospective benchmark process remained.
+- Remaining benchmark limitation: this comparison covers one stored successful workload (`7120a13568ea`); the deterministic evaluator can only judge claims against facts recorded in that context and intentionally leaves any concrete scheduler root cause unknown.
+
+### 2026-09-20 — coding-model benchmark design
+- Inspected the existing coding path: `execute_coding_task()` builds repository context, invokes the selected coder agent, parses the shared semantic-operation schema, applies deterministic edits/strict Git validation, and returns changed paths. Verification triage is available through `establish_baseline()`, `run_tests()`, `summarize_verification()`, and `compare_verification()`.
+- Historical trajectory patterns selected for measurement are invalid operation/schema output, exact replacement `no_match`, `no_op`, ungrounded paths, and verification failure; successful historical edits include grounded existing-file replacements and legitimate creation of focused test files.
+- The disposable benchmark will snapshot identical repository evidence once per fixture, run both Devstral and benchmark-only Bonsai through the existing `execute_coding_task()` path using the fallback coder wrapper, then use existing baseline/post-change verification comparison. It will report operation validity/failure classes, changed-path scope, verification, task success, and latency without changing routing.
+- Added `benchmarks/coding/`, a disposable three-fixture harness using the existing fallback `DevstralEngineer` wrapper, shared semantic operation parser/applicator, and verification triage. Bonsai is injected only as a benchmark-local server/model override; deterministic evidence is snapshotted once and reused for both models.
+- Focused coding benchmark tests: **4 passed**. Fixtures cover existing-file replacement, URL credential hardening, legitimate new-file creation, clean Git state, and operation failure-class preservation.
+- Coding benchmark preflight passed: Bonsai ROCm binary and 27B PQ2_0 GGUF exist at the requested paths, no stale `llama-server` process was present, and the benchmark CLI help renders correctly.
+- First coding benchmark launch was blocked before model calls: the temporary repositories lacked ignore rules, so `unittest` bytecode appeared as untracked baseline mutations; the new-file fixture also had zero baseline tests, which the verifier correctly treated as uninterpretable. The benchmark now uses `python -B` and a tracked baseline smoke test in the new-file fixture. Focused tests remain **4 passed**, and all three fixture baselines now pass without workspace mutation.
+- Corrected coding benchmark run completed: Devstral succeeded on **3/3** tasks with valid/applied semantic edits and passing verification; Bonsai succeeded on **1/3**. Bonsai's two controlled failures were `invalid_schema`: no JSON object for the URL task and unterminated JSON for the new-file task. No verification ran after those rejected edits, and neither model produced unnecessary changed paths.
+- Per-task latency: Devstral **56.6–100.9s** (224.0s total); Bonsai **46.6–48.6s** (141.9s total). All baselines passed and no `llama-server` process remained afterward.
+- Added per-case evidence SHA-256 to the benchmark report and a focused regression proving identical fixture evidence digests across model runs. Focused coding benchmark tests: **5 passed**. Existing `/tmp/coding-model-benchmark.json` was replayed with the digests; no model rerun was needed.
+- Final validation initially exposed an environment-only full-suite failure in the existing Git identity fallback test: this shell has a pre-existing global `~/.gitconfig` identity, so GitWorkspace correctly discovered that identity and did not use its command-scoped fallback, while the test assumes no global identity. The benchmark did not write Git config. No production or safety change is justified; validation will rerun with global Git config disabled for the test environment.
+- Final validation with `GIT_CONFIG_GLOBAL=/dev/null` (the test's intended no-global-identity condition): focused coding benchmark tests **5 passed**, full suite **216 passed**, compileall and `git diff --check` passed, and no model/benchmark process remained. The unmodified default-shell full-suite failure remains classified as a pre-existing environment configuration issue, not a benchmark or production defect.
+
+### 2026-09-20 — final fleet routing design
+- Active fleet will contain four entries: `qwen_coder`, `gpt_oss`, `bonsai2`, and `devstral`. `qwen_general` and `nemotron` will be removed from `config/models.yaml` and required runtime entries.
+- `services.security` will use GPT-OSS as the primary security reviewer. The existing retrospective interface will use active `bonsai2`; its trusted model entry carries the supplied ROCm binary, local GGUF path, full offload/Flash Attention settings, and high reasoning (mapped to `xhigh`).
+- Historical security/retrospective benchmark aliases may retain the removed model IDs only as explicit benchmark-only legacy specs, never as active routing entries, so stored benchmark workloads remain rerunnable. Qwen3.8 OBLITERATED will be documented as experimentally unsupported/too slow on the current RX 9070 + ROCm setup and will not be configured.
+- Focused fleet/config/routing/benchmark tests initially exposed two incorrect test spies; corrected them to inspect patched constructor calls. Final focused set: **30 passed**. It verifies four active model entries, GPT-OSS security routing, Bonsai retrospective routing/settings, and legacy benchmark aliases.
+- Added a focused regression proving the active Bonsai retrospective model forwards its configured local binary, GGUF path, Flash Attention, and reasoning settings into `LlamaServer`. Routing-focused subset: **9 passed**.
+- Full isolated validation after fleet routing changes: **217 passed** with `GIT_CONFIG_GLOBAL=/dev/null`; compileall for `src`, `tests`, and `benchmarks` passed; `git diff --check` passed.
+- The default-shell full suite still reports **216 passed, 1 failed** only in the pre-existing fallback-identity test because `/home/ali/.gitconfig` supplies a global user identity. With the intended isolated test environment (`GIT_CONFIG_GLOBAL=/dev/null`), the same suite is **217 passed**; no routing change or benchmark modified global Git configuration.
+- Clarified that the existing `NemotronRetrospective` class name is retained as the retrospective interface; active model selection now supplies Bonsai 2 from trusted configuration. No Nemotron model entry remains in runtime configuration.
+- Final fleet validation: focused routing/benchmark set **31 passed**, isolated full suite **217 passed**, compileall for `src`, `tests`, and `benchmarks` passed, `git diff --check` passed, and no `llama-server` process remained.
+- Updated HANDOFF's verified suite count to the final **217 passed** result.
+
+### 2026-09-20 — final post-routing smoke design
+- The active configuration resolves exactly four runtime entries: `qwen_coder`, `gpt_oss`, `bonsai2`, and `devstral`; security routes to GPT-OSS and retrospective routes to Bonsai with the configured ROCm/local-model flags.
+- The final smoke will use disposable temporary Git workspaces and a synthetic retrospective run. It will exercise Qwen primary coding, Devstral fallback-coder execution, GPT-OSS security review, and the active Bonsai retrospective path sequentially, checking outputs and server cleanup after each model.
+
+### 2026-09-20 — final post-routing smoke: fallback coding failure
+- The disposable smoke reached the real coding pipeline and model cleanup guard.
+- Qwen's primary coding path completed far enough to hand off to the separate Devstral fallback case; the script stopped on Devstral's response.
+- Devstral returned duplicate semantic operations for the same path. Existing `EditOperationsResponse` validation rejected this as `invalid_operation` before any workspace write, and the `llama-server` process was cleaned up.
+- This is a controlled fallback-model generation failure, not a validation or isolation regression. The remaining GPT-OSS security and Bonsai retrospective smoke paths still require independent execution.
+
+### 2026-09-20 — final post-routing fleet smoke result
+- Active routing preflight resolved exactly `qwen_coder`, `gpt_oss`, `bonsai2`, and `devstral`; the configured Bonsai ROCm binary/model and Flash Attention flag were present. No stale model server existed before or after the smoke.
+- Qwen primary coding passed in a disposable Git repository: grounded semantic edits applied, `git diff --check` passed, and the resulting function probe passed.
+- Devstral's two-file fallback scenario was rejected safely as `invalid_operation` because its response contained duplicate operations for one path; no write escaped the disposable workspace. A minimal single-file fallback scenario then passed with one grounded edit, `git diff --check`, semantic probe, and clean shutdown.
+- GPT-OSS security review passed through `run_security_review()` and detected the expected high-severity `subprocess.run(..., shell=True)` command-injection finding.
+- Bonsai 2 retrospective passed through `generate_retrospective()` using the active ROCm/local model configuration; it wrote a non-empty authoritative-context retrospective and shut down cleanly.
+- The smoke therefore validates startup, routing, cleanup, primary coding, security review, retrospective, and fallback behavior. The duplicate-operation case remains a recorded model-quality limitation handled by existing fail-closed validation.
+- Post-smoke validation passed: 31 focused routing/benchmark tests, full suite **217 passed**, `python -m compileall -q src tests benchmarks`, and `git diff --check` with `GIT_CONFIG_GLOBAL=/dev/null`.
+- Removed only compile-generated benchmark `__pycache__` directories after validation; no model files, target repositories, AI-Assistant, or production resources were changed.

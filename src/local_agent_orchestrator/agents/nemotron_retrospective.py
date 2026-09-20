@@ -60,6 +60,9 @@ Rules:
         with LlamaServer(
             hf_model=self.model.hf,
             context=self.model.context,
+            binary=self.model.binary or "~/llama.cpp/build/bin/llama-server",
+            model_path=self.model.model_path,
+            flash_attention=self.model.flash_attention,
             minimum_free_ram_gb=self.minimum_free_ram_gb,
             minimum_free_vram_gb=self.minimum_free_vram_gb,
             start_timeout=self.start_timeout,

@@ -11,20 +11,17 @@ models:
     context: 8192
     reasoning: low
 
-  qwen_general:
-    role: security_design
-    hf: "bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ4_XS"
+  bonsai2:
+    role: deep_reasoning_architecture_design_retrospective
+    hf: "local/Ternary-Bonsai-2-27B-PQ2_0"
+    binary: "~/llama.cpp-bonsai-rocm/build/bin/llama-server"
+    model_path: "~/Bonsai-demo/models/bonsai2-gguf/27B/Ternary-Bonsai-2-27B-PQ2_0.gguf"
+    flash_attention: true
     context: 8192
-    reasoning: medium_high
+    reasoning: high
 
   devstral:
     role: fallback_engineer
     hf: "bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M"
     context: 8192
     reasoning: medium
-
-  nemotron:
-    role: qa_retrospective
-    hf: "bartowski/nvidia_NVIDIA-Nemotron-Nano-12B-v2-GGUF:Q6_K"
-    context: 8192
-    reasoning: low

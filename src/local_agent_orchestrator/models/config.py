@@ -9,6 +9,9 @@ ReasoningLevel = Literal["none", "low", "medium", "medium_high", "high"]
 class ModelConfig(BaseModel):
     role: str
     hf: str
+    binary: str | None = None
+    model_path: str | None = None
+    flash_attention: bool = False
     context: int = Field(default=8192, ge=1024)
     reasoning: ReasoningLevel = "medium"
 
