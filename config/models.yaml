@@ -1,0 +1,30 @@
+models:
+  qwen_coder:
+    role: coder
+    hf: "tensorblock/Qwen_Qwen3-Coder-30B-A3B-Instruct-GGUF:Q3_K_M"
+    context: 8192
+    reasoning: none
+
+  gpt_oss:
+    role: reviewer_optimizer
+    hf: "ggml-org/gpt-oss-20b-GGUF:MXFP4"
+    context: 8192
+    reasoning: low
+
+  qwen_general:
+    role: security_design
+    hf: "bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ4_XS"
+    context: 8192
+    reasoning: medium_high
+
+  devstral:
+    role: fallback_engineer
+    hf: "bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M"
+    context: 8192
+    reasoning: medium
+
+  nemotron:
+    role: qa_retrospective
+    hf: "bartowski/nvidia_NVIDIA-Nemotron-Nano-12B-v2-GGUF:Q6_K"
+    context: 8192
+    reasoning: low

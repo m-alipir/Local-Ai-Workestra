@@ -1,0 +1,11 @@
+orchestrator:
+  task_retry_limit: 2
+  model_start_timeout: 120
+  model_stop_timeout: 20
+
+resources:
+  minimum_free_ram_gb: 2.0
+  minimum_free_vram_gb: 1.0
+
+paths:
+  runs: runs

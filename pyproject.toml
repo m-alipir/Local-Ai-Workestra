@@ -1,0 +1,28 @@
+[project]
+name = "local-agent-orchestrator"
+version = "1.0.0"
+description = "Safe local coding-agent orchestration with isolated verification and auditable checkpoints."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "psutil>=7.2.2",
+    "pydantic>=2.13.5",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+local-agent-orchestrator = "local_agent_orchestrator.main:main"
+local-agent = "local_agent_orchestrator.cli:main"
+local-agent-plan = "local_agent_orchestrator.plan_cli:main"
+local-agent-control = "local_agent_orchestrator.control_cli:main"
+local-agent-auto = "local_agent_orchestrator.planner_cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
