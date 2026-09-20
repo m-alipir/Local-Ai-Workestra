@@ -21,7 +21,10 @@ Production deployment is **not** part of the current milestone.
 
 ## Current status
 
-**Unit baseline:** `217 passed`
+**Unit baseline:** `255 passed`
+
+**Control-layer integration baseline:** `255 passed` with the repository's isolated Git identity
+environment after Streams A–C, the static UI assets, and the Bonsai Plan Compiler reliability fix.
 
 **Release-readiness verdict:** v1.0-ready candidate after the final audit. No runtime, safety,
 packaging, setup, CLI, compile, or cleanup blocker remains. This checkout's `master` branch is
@@ -47,7 +50,12 @@ appears. Real semantic-operation measurement still has a small successful-run sa
 runs before explicit reused-bootstrap events retain unknown bootstrap evidence, and the external
 Codex planner still requires local authentication/availability. Plan v2 review tasks run mandatory
 Git validation followed by the existing structured security reviewer; reviewer failure remains
-fail-closed.
+fail-closed. Bonsai Plan Intake may still reject underspecified Markdown with unresolved questions;
+bounded requests with explicit input behavior compile successfully in repeated live trials.
+
+**Latest Control smoke:** `0045b35eee48` passed with real Bonsai Markdown compilation, approval/SSE
+resume, target-isolated verification, and real retrospective finalization. No commit was created in
+this checkout.
 
 Historical P0 error (resolved):
 
@@ -1088,3 +1096,98 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
 - The smoke therefore validates startup, routing, cleanup, primary coding, security review, retrospective, and fallback behavior. The duplicate-operation case remains a recorded model-quality limitation handled by existing fail-closed validation.
 - Post-smoke validation passed: 31 focused routing/benchmark tests, full suite **217 passed**, `python -m compileall -q src tests benchmarks`, and `git diff --check` with `GIT_CONFIG_GLOBAL=/dev/null`.
 - Removed only compile-generated benchmark `__pycache__` directories after validation; no model files, target repositories, AI-Assistant, or production resources were changed.
+### 2026-09-21 — Workestra Control architecture and ownership
+- Read `Workestra_Control_Brief.md`, `PROGRESS.md`, `README.md`, and `HANDOFF.md` before implementation.
+- Control layer boundary: the existing orchestrator remains the sole execution engine and safety authority. New control-facing application services may call existing plan/run services, but will not duplicate CLI parsing or subprocess execution.
+- Ownership for parallel work: engine/application boundary audit (existing services and audit report); Plan Markdown intake/compiler (`services/plan_intake.py`, `models/plan_intake.py`, dedicated tests); local Control API/SSE (`control_api/`, API tests, CLI wiring); minimal UI (`web/` only); lead-owned safety/regression/E2E tests and `PROGRESS.md`.
+- Imported Markdown is untrusted. The compiler may produce only a Plan v2 candidate; existing deterministic validation remains mandatory, plan verification metadata remains informational, and no imported command is executable.
+- Local API defaults to loopback, browser disconnect must not alter durable run state, and all event/timeline data comes from authoritative run artifacts or a bounded application event journal.
+- Static UI milestone started with `web/index.html`, `web/app.js`, and `web/style.css`; the first focused asset test exposed only an overly literal assertion for the composed `/api` prefix, with no runtime defect.
+- UI asset focused tests after correcting that assertion: **2 passed**. The UI remains static/dependency-free and renders event/artifact data with `textContent`, not HTML.
+- First integrated intake/application/API focused run reached **15 passed, 1 failed**: SSE replay returned the correct event ID/payload but compact JSON omitted the spaces asserted by the API contract test. This is serialization formatting only; replay and disconnect safety behavior were otherwise exercised.
+- Stream B Plan Intake milestone complete: `PlanIntake` preserves untrusted Markdown, Bonsai 2 emits a strict candidate schema, existing Plan v2 validation remains mandatory, high/critical risk is approval-forced, and unsafe deploy/VPS/main-merge/shell/dependency-install intent is rejected. Stream-focused Plan Intake + Plan v2 tests: **30 passed**. Full-suite integration waits for Stream A's application files.
+- Stream A application boundary milestone complete: project registry persists only project paths and trusted verifier argv; start/resume/approval/artifact reads delegate to the existing engine; artifact traversal is rejected. Pause/cancel remain explicitly unsupported because the current synchronous engine has no safe interruption primitive. Focused boundary tests: **5 passed**; compile passed.
+- Integrated control-layer focused tests after Stream A/B and API serialization correction: **19 passed** (`plan_intake`, `control_application`, `control_api`, and static UI assets). SSE replay now preserves event IDs and readable JSON payloads.
+- Stream C local API milestone complete: stdlib loopback HTTP, durable artifact/event reads, `Last-Event-ID` SSE replay, bounded JSON/path validation, and background dispatch through an injected application service. Stream-focused API tests: **9 passed**. The next integration slice must connect project/plan/run lifecycle payloads and static UI serving without duplicating the engine.
+- Control integration slice implemented: durable local plan Markdown/compiled-plan records, Bonsai compiler dispatch through the application service, trusted project verifier argv, start-run request mapping, approval endpoint mapping, read-only diff/artifact access, loopback static UI serving, and explicit unsupported pause/cancel behavior. Application/API/UI focused tests: **13 passed**.
+- Added `workestra`/`local-agent-control serve` loopback entrypoint, project creation through explicit verifier argv, and UI SSE alignment with the durable `/api/runs/{id}/events` stream. Control/API/CLI/Plan Intake/UI focused tests: **25 passed**; compileall passed.
+- Full suite after the first control vertical slice: **238 passed** with `GIT_CONFIG_GLOBAL=/dev/null`; compileall and `git diff --check` passed.
+- First disposable API-driven approval/resume E2E did not reach the approval state: the asynchronous start response was accepted, but polling never observed `WAITING_FOR_APPROVAL`. The temporary run was discarded; next step is to capture returned run states/error details before changing lifecycle code.
+- Root cause confirmed: `ProjectRegistry` defaulted `runs/` inside the target workspace, so run creation made the repository dirty before the engine's clean-baseline check. Fixed control-owned default runs/analytics roots to live beside the registry (`.../runs/<project-id>` and `.../analytics/<project-id>`); explicit paths remain supported. Focused application/API tests: **11 passed**.
+- The follow-up E2E reached `WAITING_FOR_APPROVAL` and created an isolated agent branch, then verification failed closed with the expected `missing_metadata` bootstrap code because the disposable target had neither locked metadata nor a reusable target tool. The fixture will use a target-owned `.venv/bin/pytest` reuse path; no bootstrap policy change is needed.
+- Disposable API-driven control E2E passed with target-owned `.venv/bin/pytest` reuse: project creation, untrusted Markdown import, mocked compiler preview, asynchronous start after browser disconnect, approval SSE replay, approval grant, resume, trusted verification, and final `PASSED` state. Run `4f6c092dceeb`; target main stayed unchanged.
+- Added safety regressions for loopback-only binding and explicit unsupported pause behavior; Control/API/Plan Intake/UI focused tests: **23 passed**.
+- Full suite after Control API/application/UI integration and safety regressions: **240 passed** with `GIT_CONFIG_GLOBAL=/dev/null`; compileall and `git diff --check` passed.
+- Added plan-record path containment so a tampered local control index cannot make the compiler read Markdown outside its plan directory. Focused Control/API/Plan Intake/UI tests: **24 passed**.
+- Real Bonsai Plan Compiler smoke failed closed: Bonsai ROCm startup/full offload/Flash Attention succeeded, but the model response was not JSON (`Invalid strict Plan v2 candidate ... Expecting value: line 1 column 1`). No plan was accepted, no workspace was touched, and the server cleaned up. This is the first demonstrated Plan Compiler model-output blocker; structured-output behavior needs investigation before claiming real Markdown-to-Plan success.
+- Diagnosis: direct raw Bonsai calls with the same schema sometimes returned valid JSON and sometimes empty `content`; malformed non-empty output remains fail-closed. Added exactly one bounded retry for an empty compiler response, with focused Plan Intake tests **9 passed**.
+- Removed a demonstrated false positive in compiler policy checking: assumptions/unresolved commentary containing words such as `deployment` no longer trigger executable-intent rejection; only the request/task text is policy-scanned, while unresolved questions still reject preview. Plan Intake focused tests: **10 passed**.
+- Real Bonsai compiler follow-up: an explicit path/behavior Markdown request still returned empty content twice and failed with the same strict-candidate parse error after the one bounded retry. Raw direct calls can produce valid JSON, so this is an intermittent Bonsai/llama.cpp output-reliability limitation. The compiler remains fail-closed; no parser repair or unsafe fallback was added. M2 real-model compile acceptance remains open.
+- Final deterministic validation after the control integration: **243 passed**, compileall passed for `src tests web`, `git diff --check` passed, and `uv run workestra --help` exposes `approve`, `resume`, and loopback `serve`.
+- Fresh-environment check: `uv sync --locked` resolved/checked successfully without changing the lockfile.
+- Changes view integration now derives a capped committed diff from the authoritative checkpoint commit in task metrics when no `.diff` artifact exists; commit IDs are strictly validated before the fixed Git read. Focused application/API/UI tests: **17 passed**.
+- Full suite after diff/results integration: **244 passed** with isolated Git identity; compileall and `git diff --check` passed.
+- Final disposable Control E2E after all integration changes passed again (`a7cf95aff387`): loopback API/UI route, durable plan import/preview, browser-disconnect-safe background start, approval SSE replay, approval grant/resume, trusted target verifier reuse, final task/run `passed`, and clean server shutdown.
+- Final worktree verification: compileall and `git diff --check` passed; no `llama-server` process remains. No commit was created.
+
+### 2026-09-21 — Bonsai Plan Compiler response diagnosis
+- Re-read the Plan Intake, llama-server adapter, response schema, and focused tests before
+  changing behavior. The installed ROCm llama.cpp build documents OpenAI-compatible
+  `response_format.type=json_schema` and maps the nested `json_schema.schema` correctly; its
+  reasoning protocol returns final text in `message.content` and private reasoning separately in
+  `message.reasoning_content`.
+- A live raw request using the current Bonsai config reproduced the empty-content failure: HTTP
+  200 with `finish_reason=length`, `content_len=0`, and only `reasoning_content` (about 8.5k
+  characters) after the 2,048-token budget. This is a reasoning-budget exhaustion, not a schema
+  parser failure or alternate final-content field.
+- In the same server process, `max_tokens=4096` produced schema-shaped final content, a per-request
+  `reasoning_effort=low` override produced final content, and
+  `chat_template_kwargs={"enable_thinking": false}` produced final content with no reasoning and
+  the shortest latency. The current Plan Compiler sends neither per-request control and therefore
+  can exhaust the budget under Bonsai `xhigh`.
+- The llama-server adapter investigation removed the old optional raw-reasoning fallback and added
+  focused tests ensuring `reasoning_content` is never treated as final output. Empty final content
+  remains fail-closed; the implemented fix adds only bounded diagnostics/request controls, with no
+  reasoning leakage or parser repair.
+- Implemented the narrow reliability fix: `LlamaServer.chat` now forwards optional per-request
+  reasoning/template controls, rejects empty or non-text assistant content with bounded metadata
+  (`finish_reason`, message fields, and reasoning-presence only), and never returns private reasoning
+  as a candidate. Plan Compiler retries that controlled empty response once and requests
+  `chat_template_kwargs={"enable_thinking": false}` so Bonsai's global `xhigh` setting cannot consume
+  the entire structured-output budget. Focused adapter/Plan Intake tests: **28 passed**.
+- Added a regression for preserving the live empty-response diagnostics through the bounded retry;
+  the focused adapter/Plan Intake set now passes **29 tests**.
+- A five-request live raw probe using the exact current compiler request confirmed the old behavior
+  deterministically: all five HTTP 200 responses took **42.755–43.123s**, had empty `content`,
+  `finish_reason="length"`, `completion_tokens=2048`, and only `reasoning_content` (8.4–8.9k
+  characters). Startup and cleanup were clean; no server remained. This rules out an intermittent
+  alternate response field for the old request and confirms reasoning-budget exhaustion.
+- Three real post-fix `compile_plan` trials with an explicit helper/test Markdown request all
+  returned structured candidates in **8.5–16.2s** with no empty-content error. Each was safely
+  rejected only because the model invented an unresolved edge-case question; this is distinct from
+  response transport failure. The compiler prompt now says unresolved questions are for missing
+  requirements that block safe implementation, not invented edge cases.
+- Repeated real trials with explicit input-domain behavior then compiled successfully **3/3** in
+  **6.2–6.4s** each. Every result was schema-valid, had the expected code and test tasks, and had
+  no unresolved questions. This establishes a stable Markdown→Bonsai→Plan v2 path for a bounded
+  request while preserving fail-closed rejection for genuinely unresolved requirements.
+- Focused regressions now also assert that Plan Intake sends the active JSON schema together with
+  the no-thinking request control; adapter/Plan Intake remains **29 passed**.
+- Real Control API/UI lifecycle smoke with actual Bonsai compilation passed (`5d5ce7585114`):
+  Markdown import → API compile in **5.99s** → generated high-risk test task → durable approval
+  wait → SSE event replay → approval/resume → target-owned pytest success. The disposable target
+  stayed isolated and the server shut down cleanly; finalization was stubbed only to keep this
+  control-plane smoke focused on intake, approval, and trusted execution.
+- Scoped strict empty-content diagnostics to Plan Intake via `require_content=True`; other model
+  roles retain their existing empty-string handling while never consuming reasoning as final text.
+  Focused Control/Plan Intake/llama-server/UI regressions passed: **47 tests**.
+- Full isolated orchestrator suite passed: **255 tests** with `GIT_CONFIG_GLOBAL=/dev/null`.
+- `compileall -q src tests benchmarks`, `git diff --check`, and the post-E2E process scan all
+  passed; no model or control smoke process remains.
+- Final post-validation real Control API/UI smoke also passed (`0045b35eee48`): actual Bonsai
+  Markdown compilation in **6.02s**, generated approval-gated test task, approval/SSE/resume,
+  target-isolated verification, and real retrospective finalization. The disposable server and
+  model lifecycle cleaned up successfully.
+- Final compileall, `git diff --check`, and process cleanup checks passed after the scoped adapter
+  compatibility adjustment; the full-finalization E2E left no model/control process and no commit
+  was created.

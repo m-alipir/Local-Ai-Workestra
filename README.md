@@ -49,6 +49,32 @@ uv run local-agent-control --help
 uv run local-agent-auto --help
 ```
 
+### Workestra Control
+
+The local Control plane is a thin browser/API layer over the same execution
+engine. It binds to loopback by default and keeps project records in a small
+JSON registry; run state, trajectory, metrics, checkpoints, and retrospectives
+remain the engine's filesystem artifacts.
+
+```sh
+uv run workestra serve \
+  --registry ~/.config/workestra/projects.json \
+  --host 127.0.0.1 \
+  --port 8765
+```
+
+Open `http://127.0.0.1:8765/`. Register a project with an explicit verifier
+argv, import rough Markdown, compile it with Bonsai 2, review the Plan v2
+preview, and start the run. Imported Markdown and compiler output cannot supply
+shell commands or override the trusted project verifier. The browser may
+disconnect and reconnect; SSE replays durable trajectory events with
+`Last-Event-ID`.
+
+The MVP exposes project selection, plan import/preview, run state, approvals,
+timeline, artifacts/diff, and run history. Pause/cancel are reported as
+unsupported until the synchronous engine has a safe interruption primitive;
+the Control layer never pretends those actions succeeded.
+
 Run one coding task against a clean target repository:
 
 ```sh

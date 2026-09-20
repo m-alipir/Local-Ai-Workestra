@@ -17,6 +17,10 @@ class LlamaServerError(RuntimeError):
     pass
 
 
+class LlamaServerEmptyContentError(LlamaServerError):
+    """The server completed without a textual assistant answer."""
+
+
 class LlamaServer:
     def __init__(
         self,
@@ -170,8 +174,10 @@ class LlamaServer:
         system_prompt: str | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.2,
-        reasoning_fallback: bool = False,
         response_format: dict | None = None,
+        reasoning_effort: str | None = None,
+        chat_template_kwargs: dict | None = None,
+        require_content: bool = False,
     ) -> str:
         messages: list[dict[str, str]] = []
 
@@ -198,6 +204,10 @@ class LlamaServer:
 
         if response_format is not None:
             request_body["response_format"] = response_format
+        if reasoning_effort is not None:
+            request_body["reasoning_effort"] = reasoning_effort
+        if chat_template_kwargs is not None:
+            request_body["chat_template_kwargs"] = chat_template_kwargs
 
         response = httpx.post(
             f"{self.base_url}/v1/chat/completions",
@@ -216,22 +226,27 @@ class LlamaServer:
 
         try:
             message = data["choices"][0]["message"]
-            content = message.get("content") or ""
+            if not isinstance(message, dict):
+                raise TypeError("message must be an object")
 
-            if content:
-                return content
-
-            if reasoning_fallback:
-                reasoning = (
+            content = message.get("content")
+            if content is None:
+                content = ""
+            if not isinstance(content, str):
+                raise TypeError("message.content must be text")
+            if not content and require_content:
+                finish_reason = data["choices"][0].get("finish_reason")
+                fields = ",".join(sorted(message)) or "none"
+                reasoning_present = bool(
                     message.get("reasoning_content")
                     or message.get("reasoning")
-                    or ""
                 )
-
-                if reasoning:
-                    return reasoning
-
-            return ""
+                raise LlamaServerEmptyContentError(
+                    "llama-server returned empty assistant content "
+                    f"(finish_reason={finish_reason!r}; message_fields={fields}; "
+                    f"reasoning_content_present={reasoning_present})"
+                )
+            return content
         except (KeyError, IndexError, TypeError) as exc:
             raise LlamaServerError(
                 f"Unexpected llama-server response: {data}"

@@ -16,6 +16,7 @@ local-agent-orchestrator = "local_agent_orchestrator.main:main"
 local-agent = "local_agent_orchestrator.cli:main"
 local-agent-plan = "local_agent_orchestrator.plan_cli:main"
 local-agent-control = "local_agent_orchestrator.control_cli:main"
+workestra = "local_agent_orchestrator.control_cli:main"
 local-agent-auto = "local_agent_orchestrator.planner_cli:main"
 
 [build-system]

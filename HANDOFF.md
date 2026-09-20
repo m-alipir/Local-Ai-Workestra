@@ -19,6 +19,20 @@ VPS resources, or another repository's main branch without explicit approval.
   was not changed. AI-Assistant main and production remain untouched.
 - Disposable mixed multi-task soak passed for success, blocked failure, and
   approval/resume paths.
+- Workestra Control slice is present: loopback stdlib HTTP/SSE API, durable
+  project registry outside target workspaces, Markdown/Bonsai Plan Intake, and
+  dependency-free static UI. The existing engine remains the only execution
+  authority. Control focused/integration tests and full suite currently total
+  **255 passed** with the isolated Git test environment.
+- The Bonsai Plan Compiler keeps the strict JSON schema and now disables model
+  thinking per request because the active xhigh server mode otherwise exhausts
+  the 2,048-token output budget with private reasoning. Empty/non-text content
+  remains fail-closed with bounded diagnostics and one retry. Repeated real
+  Markdown-to-Plan trials and final Control API/UI smoke `0045b35eee48` passed, including real
+  retrospective finalization.
+- Pause/cancel are explicit unsupported responses until the synchronous engine
+  gains a safe interruption primitive. Approval/resume and browser reconnect
+  are verified end-to-end in disposable run `a7cf95aff387`.
 
 The current release audit is recorded at the end of `PROGRESS.md`. Do not use
 the historical explorer-context-overflow notes in older progress entries as
@@ -35,6 +49,9 @@ current instructions; the compact evidence limits are already applied.
    `git apply --check --recount --whitespace=error` enforce safety.
 5. Baseline-aware verification, explicit review, checkpoint, rollback, and
    finalization persist state, metrics, trajectory, audit, and retrospective.
+6. Workestra Control serves the static browser UI and loopback API. It stores
+   only project/plan indexes outside target workspaces, dispatches lifecycle
+   calls to the existing services, and replays trajectory events over SSE.
 
 Models run one at a time through `LlamaServer` context managers:
 

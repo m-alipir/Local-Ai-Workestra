@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Workestra Control</title>
+    <link rel="stylesheet" href="/web/style.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">LOCAL CONTROL PLANE</p>
+        <h1>Workestra Control</h1>
+        <p class="muted">Select a project, compile a plan, and observe the existing execution engine.</p>
+        <p id="health" class="status">Connecting…</p>
+      </header>
+
+      <section class="card" aria-labelledby="project-title">
+        <h2 id="project-title">Project</h2>
+        <div class="row">
+          <label>Project
+            <select id="project-select"><option value="">Loading…</option></select>
+          </label>
+          <button id="refresh-projects" type="button">Refresh</button>
+        </div>
+        <form id="project-form" class="row">
+          <label>Name <input id="project-name" required autocomplete="off"></label>
+          <label>Repository path <input id="project-path" required placeholder="/path/to/repository" autocomplete="off"></label>
+          <label>Verifier argv (JSON) <input id="project-test-argv" value='["uv", "run", "pytest", "-q"]' required></label>
+          <button type="submit">Add project</button>
+        </form>
+        <p id="project-detail" class="muted"></p>
+      </section>
+
+      <section class="card" aria-labelledby="plan-title">
+        <h2 id="plan-title">Plan intake</h2>
+        <p class="muted">Imported Markdown is untrusted. Compilation produces a preview only; it cannot run commands.</p>
+        <form id="plan-form">
+          <label for="plan-markdown">PLAN.md</label>
+          <textarea id="plan-markdown" required placeholder="# Goal
+
+Describe the work in plain Markdown…"></textarea>
+          <div class="row">
+            <button type="submit">Import and compile</button>
+            <button id="start-run" type="button" disabled>Start approved plan</button>
+          </div>
+        </form>
+        <pre id="plan-preview" class="output" aria-live="polite">No plan imported.</pre>
+      </section>
+
+      <section class="card" aria-labelledby="runs-title">
+        <div class="row between">
+          <h2 id="runs-title">Runs</h2>
+          <button id="refresh-runs" type="button">Refresh</button>
+        </div>
+        <div id="run-list" class="list">No runs.</div>
+        <div id="run-detail" class="detail" hidden>
+          <div class="row between"><h3 id="run-heading"></h3><span id="run-status" class="badge"></span></div>
+          <div id="task-list" class="list"></div>
+          <div class="row">
+            <button id="resume-run" type="button">Resume</button>
+            <button id="pause-run" type="button">Pause</button>
+            <button id="cancel-run" type="button">Cancel</button>
+          </div>
+          <h3>Timeline</h3>
+          <pre id="timeline" class="output" aria-live="polite"></pre>
+          <h3>Diff / results</h3>
+          <pre id="run-artifacts" class="output"></pre>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/web/app.js"></script>
+  </body>
+</html>

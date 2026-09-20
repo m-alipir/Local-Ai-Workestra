@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import shlex
 
+from local_agent_orchestrator.control_api import create_server
+from local_agent_orchestrator.services.control_application import ControlApplication
+from local_agent_orchestrator.services.project_registry import ProjectRegistry
 from local_agent_orchestrator.services.resume import (
     approve_waiting_task,
     resume_execution_plan,
@@ -66,6 +69,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--analytics-dir",
         default=".agent/analytics",
     )
+
+    serve = subparsers.add_parser(
+        "serve",
+        help="Serve the local Workestra Control web interface.",
+    )
+    serve.add_argument(
+        "--registry",
+        default="~/.config/workestra/projects.json",
+        help="Project registry JSON path.",
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
 
     return parser
 
@@ -134,6 +149,31 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         return 0 if result.passed else 1
+
+    if args.command == "serve":
+        try:
+            application = ControlApplication(
+                ProjectRegistry(args.registry)
+            )
+            server = create_server(
+                service=application,
+                host=args.host,
+                port=args.port,
+            )
+        except Exception as exc:
+            parser.exit(1, f"{parser.prog}: error: {exc}\n")
+
+        print(
+            f"Workestra Control listening on "
+            f"http://{args.host}:{args.port}/"
+        )
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            server.server_close()
+        return 0
 
     parser.error(
         f"Unknown command: {args.command}"

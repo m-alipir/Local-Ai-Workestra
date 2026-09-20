@@ -3,7 +3,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from local_agent_orchestrator.adapters.llama_server import LlamaServer
+from local_agent_orchestrator.adapters.llama_server import (
+    LlamaServer,
+    LlamaServerEmptyContentError,
+    LlamaServerError,
+)
 from local_agent_orchestrator.services.resource_guard import ResourceSnapshot
 
 
@@ -43,6 +47,97 @@ def test_chat_returns_content():
         result = server.chat("test")
 
     assert result == "hello"
+
+
+def test_chat_keeps_empty_content_without_exposing_reasoning_by_default():
+    server = LlamaServer(hf_model="test/model")
+
+    fake_response = MagicMock()
+    fake_response.json.return_value = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": "",
+                    "reasoning_content": "private reasoning",
+                },
+            }
+        ]
+    }
+
+    with patch(
+        "local_agent_orchestrator.adapters.llama_server.httpx.post",
+        return_value=fake_response,
+    ):
+        assert server.chat("test") == ""
+
+
+def test_chat_can_require_content_with_diagnostic():
+    server = LlamaServer(hf_model="test/model")
+
+    fake_response = MagicMock()
+    fake_response.json.return_value = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "content": "",
+                    "reasoning_content": "private reasoning",
+                },
+            }
+        ]
+    }
+
+    with patch(
+        "local_agent_orchestrator.adapters.llama_server.httpx.post",
+        return_value=fake_response,
+    ), pytest.raises(
+        LlamaServerEmptyContentError,
+        match="empty assistant content.*reasoning_content_present=True",
+    ):
+        server.chat("test", require_content=True)
+
+
+def test_chat_forwards_reasoning_controls():
+    server = LlamaServer(hf_model="test/model")
+    fake_response = MagicMock()
+    fake_response.json.return_value = {
+        "choices": [{"message": {"content": "{}"}}]
+    }
+
+    with patch(
+        "local_agent_orchestrator.adapters.llama_server.httpx.post",
+        return_value=fake_response,
+    ) as post:
+        server.chat(
+            "test",
+            reasoning_effort="low",
+            chat_template_kwargs={"enable_thinking": False},
+        )
+
+    body = post.call_args.kwargs["json"]
+    assert body["reasoning_effort"] == "low"
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [None, {"content": []}, {"content": {"text": "hello"}}],
+)
+def test_chat_rejects_non_text_message_content(message):
+    server = LlamaServer(hf_model="test/model")
+
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"choices": [{"message": message}]}
+
+    with (
+        patch(
+            "local_agent_orchestrator.adapters.llama_server.httpx.post",
+            return_value=fake_response,
+        ),
+        pytest.raises(LlamaServerError, match="Unexpected llama-server response"),
+    ):
+        server.chat("test")
 
 
 def test_chat_forwards_optional_response_format():
