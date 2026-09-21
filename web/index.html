@@ -30,7 +30,23 @@
           </label>
           <button id="refresh-projects" type="button">Refresh</button>
         </div>
-        <form id="project-form" class="row">
+        <div class="row project-actions" aria-label="Selected project actions">
+          <button id="edit-project" type="button" disabled>Edit selected project</button>
+          <button id="delete-project" type="button" class="danger" disabled>Delete selected project</button>
+        </div>
+        <p class="muted management-note">Project changes affect future runs. Imported plans and this browser's plan history remain available for reuse.</p>
+        <form id="project-edit-form" class="row management-form" data-mode="edit" aria-labelledby="project-edit-title" hidden>
+          <h3 id="project-edit-title">Edit selected project</h3>
+          <label>Name <input id="project-edit-name" autocomplete="off"></label>
+          <label>Repository path <input id="project-edit-path" autocomplete="off"></label>
+          <label>Verifier argv (JSON) <input id="project-edit-test-argv"></label>
+          <div class="row">
+            <button type="submit">Save project changes</button>
+            <button id="cancel-project-edit" type="button">Cancel</button>
+          </div>
+        </form>
+        <form id="project-form" class="row" data-mode="create" aria-labelledby="project-create-title">
+          <h3 id="project-create-title">Add project</h3>
           <label>Name <input id="project-name" required autocomplete="off"></label>
           <label>Repository path <input id="project-path" required placeholder="/path/to/repository" autocomplete="off"></label>
           <label>Verifier argv (JSON) <input id="project-test-argv" value='["uv", "run", "pytest", "-q"]' required></label>
@@ -44,7 +60,7 @@
           <h2 id="plan-title">Plan intake</h2>
           <span id="plan-status" class="status">No plan selected</span>
         </div>
-        <p class="muted">Imported Markdown is untrusted. Compilation produces a preview only; it cannot run commands.</p>
+        <p class="muted">Imported Markdown is untrusted. Compilation produces a preview only; it cannot run commands. Plans and history persist when a project is edited or removed.</p>
         <div class="row">
           <label for="plan-history">Plans for this project
             <select id="plan-history">
@@ -79,6 +95,8 @@ Describe the work in plain Markdown…"></textarea>
             <button id="resume-run" type="button">Resume</button>
             <button id="pause-run" type="button">Pause</button>
             <button id="cancel-run" type="button">Cancel</button>
+            <button id="archive-run" type="button">Archive</button>
+            <button id="cleanup-run" type="button" class="danger">Clean up run files</button>
           </div>
           <h3>Timeline</h3>
           <pre id="timeline" class="output" aria-live="polite"></pre>

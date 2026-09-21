@@ -16,6 +16,11 @@ input, select, textarea { background: #111827; color: #f9fafb; }
 textarea { width: 100%; min-height: 10rem; resize: vertical; margin: .5rem 0 1rem; }
 button { background: #2563eb; color: white; cursor: pointer; }
 button:disabled { opacity: .5; cursor: not-allowed; }
+button.danger { background: #b91c1c; }
+button.danger:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+.project-actions { margin-top: .75rem; }
+.management-note { margin: .75rem 0 0; font-size: .9rem; }
+.management-form { margin: .75rem 0; padding: .8rem; border: 1px solid #4b5563; border-radius: .45rem; }
 .status, .badge { display: inline-block; padding: .2rem .55rem; border-radius: 999px; background: #374151; font-size: .85rem; }
 .error { margin-top: 1rem; padding: .8rem; border: 1px solid #f87171; border-radius: .45rem; background: #3f1d24; color: #fecaca; }
 .error details { margin-top: .6rem; }

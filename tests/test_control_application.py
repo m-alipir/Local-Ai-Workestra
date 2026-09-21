@@ -35,6 +35,80 @@ def test_project_registry_persists_projects_and_rejects_shell_strings(tmp_path):
         registry.register("Shell", tmp_path / "repo", "pytest -q")
 
 
+def test_project_update_preserves_control_history_and_validates_verifier(tmp_path):
+    repo = tmp_path / "repo"
+    new_repo = tmp_path / "new-repo"
+    repo.mkdir()
+    new_repo.mkdir()
+    registry = ProjectRegistry(tmp_path / "projects.json")
+    project = registry.register("Demo", repo, ["pytest", "-q"])
+    history = project.runs_dir / "run-1" / "state.json"
+    history.parent.mkdir(parents=True)
+    history.write_text("{}", encoding="utf-8")
+
+    updated = registry.update(
+        project.id,
+        name="Renamed",
+        workspace_root=new_repo,
+        test_command=["python", "-m", "pytest"],
+    )
+
+    assert updated.name == "Renamed"
+    assert updated.workspace_root == new_repo.resolve()
+    assert updated.test_command == ("python", "-m", "pytest")
+    assert updated.runs_dir == project.runs_dir
+    assert history.is_file()
+    assert repo.is_dir()
+    with pytest.raises(ValueError, match="sequence"):
+        registry.update(project.id, test_command="pytest -q")
+    with pytest.raises(ValueError, match="not a directory"):
+        registry.update(project.id, workspace_root=tmp_path / "missing")
+
+
+def test_partial_project_update_merges_and_validates_final_configuration(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app = ControlApplication(ProjectRegistry(tmp_path / "projects.json"))
+    project = app.create_project("Demo", repo, ["pytest", "-q"])
+
+    updated = app.update_project_request(
+        project.id,
+        {"test_argv": ["python", "-m", "pytest"]},
+    )
+
+    assert updated.name == "Demo"
+    assert updated.workspace_root == repo.resolve()
+    assert updated.test_command == ("python", "-m", "pytest")
+    renamed = app.update_project_request(project.id, {"name": "Renamed"})
+    assert renamed.name == "Renamed"
+    assert renamed.workspace_root == repo.resolve()
+    assert renamed.test_command == ("python", "-m", "pytest")
+    with pytest.raises(ValueError, match="non-empty argv"):
+        app.update_project_request(project.id, {"test_argv": []})
+    with pytest.raises(ValueError, match="cannot be empty"):
+        app.update_project_request(project.id, {"path": ""})
+
+
+def test_delete_project_removes_only_registry_entry(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry_path = tmp_path / "projects.json"
+    app = ControlApplication(ProjectRegistry(registry_path))
+    project = app.create_project("Demo", repo, ["pytest"])
+    imported = app.import_plan({"project_id": project.id, "markdown": "# Keep"})
+    history = project.runs_dir / "run-1" / "state.json"
+    history.parent.mkdir(parents=True)
+    history.write_text("{}", encoding="utf-8")
+
+    deleted = app.delete_project(project.id)
+
+    assert deleted.id == project.id
+    assert app.list_projects() == []
+    assert repo.is_dir()
+    assert history.is_file()
+    assert (tmp_path / "plans" / f"{imported['id']}.record.json").is_file()
+
+
 def test_application_starts_with_trusted_project_verifier(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

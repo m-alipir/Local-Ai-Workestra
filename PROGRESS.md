@@ -1221,6 +1221,7 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
   completed, and all resources shut down cleanly.
 - Final compileall, Node syntax, diff, and process-cleanup checks passed. No commit was created;
   AI-Assistant and production/VPS were untouched.
+
 # 2026-09-21 — Control persistence/diagnostics milestone started
 
 - Inspected durable artifacts before implementation. Historical failed runs (including `af1230bb15f4`, `2272d141591f`, `4b298112f7ca`) retain task errors, model/operation failures, and trajectory events; successful run `7120a13568ea` retains baseline/post identities and checkpoint data.
@@ -1241,3 +1242,164 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
 - The default filesystem Control adapter now exposes the same diagnostics contract. Focused API/persistence/diagnostics/UI tests: **26 passed**.
 - Final validation: **268 passed** under `GIT_CONFIG_GLOBAL=/dev/null`; `compileall`, `node --check web/app.js`, and `git diff --check` passed again. No AI-Assistant or production/VPS files were touched.
 - Remaining limitation: browser localStorage is only a convenience cache; the authoritative plan history is the Control service's filesystem records. Diagnostics are deterministic and bounded; they do not infer causes beyond recorded state/trajectory/metrics/artifacts, and raw details remain available behind the UI disclosure panel.
+
+# 2026-09-21 — Workestra run 28472edfddd1 investigation
+
+- Located the run artifacts at `/home/ali/.config/workestra/runs/b3e63dece479/28472edfddd1`.
+- Authoritative result: bootstrap reused the target verifier, baseline pytest exited 2 during collection with `ModuleNotFoundError: No module named 'app'` for `/home/ali/workestra-test/tests/test_app.py`, no coding model ran, no files changed, and no checkpoint was created. The verifier then reported `baseline_workspace_mutated` after its clean-workspace rollback guard and returned code 125.
+- The displayed `verification_failure` is therefore a summarized baseline/environment failure, not an agent edit failure. The stored trajectory/metrics are consistent; UI state consistency and stale asynchronous response handling remain under investigation.
+- Independent target reproduction confirms the configured console verifier fails collection with `ModuleNotFoundError: app`, while `python -m pytest -q` and `PYTHONPATH=. uv run pytest -q` each pass. The target is clean at commit `95bdf0b`; no target files were changed.
+- Backend run detail, diagnostics, and SSE routes now forward the selected `project_id`, preventing duplicate run IDs across projects from becoming ambiguous or cross-scoped.
+- UI run selection now invalidates older async responses, clears detail/timeline/artifacts/diagnostics before a new run or selection, scopes EventSource connections to the selected run/project, filters mismatched payloads, and reconnects only for the current source/token. Failure summaries include verification classification and a bounded concrete error line when recorded.
+- Focused scope/diagnostics/UI tests: **7 passed**; loopback Control API tests: **10 passed**; Node syntax, compileall, and diff checks passed with the temporary UV cache under `/tmp`.
+- Full isolated suite after run-scoping and stale-response changes: **270 passed**.
+- One final E2E harness attempt failed only because it parsed the SSE response as JSON; no product state was changed. The harness is being corrected to inspect the raw event stream.
+- Final sequential-run E2E passed: disposable Control API created a failed run `efd48d51f3b5` with a concrete verifier summary/output, then a distinct successful run `8068d5a1895c`. Run detail/list statuses agreed, the successful diagnostics were `failure_class=none` with no failing task, and its SSE stream contained only the selected run ID.
+- Final focused scope/diagnostics/UI regressions: **7 passed**. Final full isolated suite: **270 passed**. Node syntax, compileall, and `git diff --check` passed.
+
+# 2026-09-21 — Workestra Control management actions
+
+- Added safe project management operations. Existing projects can update their display name,
+  workspace path, and trusted verifier argv; updates retain the Control-owned runs and analytics
+  directories. Project deletion removes only the registry entry, preserving imported plans, run
+  history, target files, and Git branches.
+- Added terminal-run history cleanup. The Control service can archive old terminal runs under its
+  own `.archive` directory or delete selected terminal run artifacts. Active/recent runs,
+  traversal/symlink targets, and malformed state fail closed; no target workspace or Git command
+  is touched.
+- Added UI edit/delete and archive/cleanup actions with explicit confirmation dialogs. Plan history
+  remains available unless explicitly deleted; destructive actions are scoped to the selected
+  project/run and API routes carry the project id to prevent duplicate-run ambiguity.
+- Initial archive-route regression exposed only a test unpacking error (`ControlAPI.handle` returns status, headers, body); no product state changed, and the test was corrected.
+- Focused management/API/application/run-history/UI tests: **34 passed**. The new cleanup regression
+  proves archive and cleanup routes work, a failed run artifact is removed while a target-repository
+  marker survives, and archived state remains under Control-owned history.
+- Full isolated suite: **279 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
+- Full suite remains green after the archive-route regression correction: **279 passed**.
+- `compileall -q src tests benchmarks`, `node --check web/app.js`, and `git diff --check` pass.
+- Repeated compileall, Node syntax, and diff checks also pass after the archive-route regression
+  correction.
+- Disposable loopback Control UI/API E2E passed: project name/path/verifier argv were edited,
+  the imported plan remained reusable, a failed terminal run was cleaned up, the target repository
+  marker survived, and the server shut down cleanly.
+- Final management E2E also archived one terminal run and cleaned another after project editing;
+  the persisted plan, target repositories, and Control archive remained intact.
+- No commit is planned for this milestone. Remaining limitation: archived runs are stored under
+  Control's `.archive` directory and can be listed by the service, but the minimal UI currently
+  exposes archive/cleanup actions rather than a separate archived-history browser.
+
+# 2026-09-21 — Workestra Control project edit form
+
+- Project editing now loads the selected saved name, workspace path, and trusted verifier argv
+  into the form. The UI tracks the original values and sends only changed fields; submitting
+  unchanged values closes without a write.
+- Partial updates are merged with the persisted project before validation, preserving unchanged
+  fields and the existing runs/analytics paths. Empty workspace paths and invalid verifier argv
+  remain rejected; delete and run cleanup actions are unchanged and separate.
+- Focused project/application/UI tests: **16 passed**.
+- Full isolated suite: **280 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
+- `node --check web/app.js`, `compileall -q src tests benchmarks`, and `git diff --check` pass.
+
+# 2026-09-21 — Workestra Control true edit mode
+
+- Separated create and edit form semantics in the UI. Edit fields are populated from the selected
+  project and are not subject to create-form native required-field validation. The edit submit path
+  remains PATCH-only and guarded by explicit edit mode.
+- Added regression coverage for changing only verifier argv: saved project name and path are retained
+  while the final merged verifier argv is validated and saved.
+- Focused edit/API/application/UI tests: **29 passed**.
+- API regression also confirms a verifier-only PATCH returns and preserves the saved name/path.
+- Full isolated suite rerun after API regression: **280 passed**.
+- Full isolated suite: **280 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
+- `node --check web/app.js`, `compileall -q src tests benchmarks`, and `git diff --check` pass.
+
+# 2026-09-21 — Workestra run 330d9e595de8 baseline mutation
+
+- Run `330d9e595de8` failed before coding. The configured verifier was `uv run pytest -q`; its
+  baseline collection failed to import the target's top-level `app.py` and created only benign
+  untracked bytecode: `__pycache__/app.cpython-312.pyc` and
+  `tests/__pycache__/test_app.cpython-312-pytest-9.1.1.pyc`. The clean-workspace guard correctly
+  classified this as `baseline_workspace_mutated`; target HEAD and committed files were unchanged.
+- The run briefly showed `pending` because the API publishes the initial state before its background
+  worker adds task rows; artifact events confirm one run, not mixed UI state. No UI change is justified.
+- Fixed verification environment handling without weakening the guard: inherited orchestrator
+  `PYTHONPATH` is removed, the target workspace root is supplied as `PYTHONPATH`, and
+  `PYTHONDONTWRITEBYTECODE=1` prevents verifier bytecode artifacts. The configured `uv run pytest -q`
+  remains trusted and now imports the flat-layout target correctly.
+- Focused runner/bootstrap/triage tests: **24 passed**.
+- The first corrected harness run (`b993d1c0f211`) proved baseline passed and coding started but was
+  intentionally interrupted by the harness; it recorded `llama-server exited with code -2`, with no
+  target changes surviving.
+- Final loopback Control E2E passed (`b800be372e19`): baseline passed with the configured
+  `uv run pytest -q`, task-001 reached Qwen attempt 1, post-change verification passed, all four
+  tasks completed, checkpoint `7f30db1ca001b9defb3126fb9f14cf313f8c37d2` was created on the
+  disposable agent branch, and the target workspace was clean afterward.
+- Full isolated suite: **281 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
+
+# 2026-09-21 — Workestra Control reliability/usability sprint
+
+- Audited the latest disposable baseline-mutation artifacts and the Control lifecycle. The
+  `pending` → task-row transition is the expected asynchronous publication sequence; it is not
+  stale state. The earlier verifier mutation was limited to target bytecode and is handled by the
+  target-root import environment plus `PYTHONDONTWRITEBYTECODE=1`; the clean-workspace guard remains
+  fail-closed.
+- Closed a real run-scope gap: trajectory replay now ignores events explicitly labeled for a
+  different run, and artifact/diff/diagnostics/detail/event reads carry the selected project id so
+  duplicate run ids cannot cross project boundaries. Legacy unlabeled events remain readable.
+- Hardened the static UI lifecycle: malformed project/plan responses fail closed, run detail is
+  cleared before selection, stale async/SSE responses are ignored, and archive/cleanup require
+  terminal state. Unsupported pause/cancel controls are now disabled; resume is offered only while
+  a run is waiting for approval, matching the synchronous engine's actual semantics.
+- Focused reliability/API/UI regressions after these changes: **36 passed**. No target repository,
+  AI-Assistant branch, production/VPS resource, or commit was modified.
+- A final adapter audit found that project-scoped UI reads could pass `project_id` to the
+  read-only filesystem adapter, whose methods previously accepted only `run_id`. The adapter now
+  accepts and ignores that scope (the registry-backed application service still enforces it), with
+  a regression for scoped detail reads. This preserves the generic API contract without weakening
+  project isolation.
+- Final sprint validation: focused Control/API/UI scope and lifecycle set **34 passed**; the full
+  isolated orchestrator suite is **284 passed**. `compileall -q src tests benchmarks`,
+  `node --check web/app.js`, and `git diff --check` all pass.
+- Disposable lifecycle evidence remains green: the stored real-model coding run `b800be372e19`
+  reached Qwen coding attempt 1, passed target verification, checkpointed, and cleaned up; the
+  stored sequential disposable flow `efd48d51f3b5` (intentional verifier failure) →
+  `8068d5a1895c` (success) confirmed distinct run ids, matching list/detail status, concrete
+  diagnostics, selected-run-only SSE, and no state leakage. No fresh model call was needed after
+  this UI/API-only hardening. No target repository, AI-Assistant branch, production/VPS resource,
+  or commit was modified.
+- Fresh disposable mixed-task smoke completed after correcting the harness to use trusted locked
+  pytest metadata and a clean target baseline: intentional verifier failure `fe31188f23c9` was
+  followed by successful run `0d23bd33202d`; list/detail status and selected-run SSE were
+  consistent (`2` events), and the temporary target was deleted. The initial probe failed closed
+  because the disposable target lacked supported dependency metadata and was dirty before the
+  engine could start; no product state or repository outside the temporary directory was changed.
+- A fresh Markdown-to-Control E2E exposed a real resource-guard false positive: the guard treated
+  the literal `llama-server` text in a shell command as a live model process. The run therefore
+  failed closed before Qwen coding, while the compiler server itself was shutting down normally.
+  Process detection now matches the executable basename or an explicit `llama` subcommand only;
+  shell/python command text cannot reserve the model slot. Added regressions for real executables
+  and shell-text false positives.
+- The same E2E then exposed a lifecycle race: failed tasks publish terminal state before the
+  finalizer's Bonsai retrospective has released its server, allowing the next run to start while
+  that model is still live. `run_execution_plan` now finalizes first, publishes terminal state only
+  after model cleanup, and records `finalization_failed` as a controlled failed run if analytics or
+  retrospective generation raises. Added a regression proving finalization failure cannot leave a
+  run reported as successful.
+- Inspection showed dependency propagation also set `state.status=failed` before the finalizer,
+  so merely moving `finish_run` was insufficient. The runner now publishes `running` plus a
+  `finalization_started` trajectory event during analytics/retrospective cleanup, then publishes
+  `passed`/`failed` only after cleanup; finalizer exceptions remain controlled failures. The
+  regression now asserts the persisted state is non-terminal while finalization is executing.
+- Fresh full disposable Control E2E passed after the finalization-phase fix. Markdown import and
+  Bonsai compilation succeeded; intentional baseline failure `6fb3562a45fc` was diagnosed and
+  cleaned up; restored-verifier run `cb85ec8b60ea` reached Qwen coding, accepted a Qwen edit,
+  passed both generated tasks/review, created checkpoint `02805946182f864525bfad212c9aaf741f5a84aa`,
+  and left the temporary target clean before deletion. The generated code/test tasks passed;
+  the stored real-model run `b800be372e19` separately proves the review task path. Repeated
+  project/plan/detail reads and SSE
+  reconnect replay returned `12` original and `11` replayed events with no cross-run leakage. No
+  model or Control process remained afterward.
+- Post-fix focused runner/resource/lifecycle tests: **28 passed**; the broader resource, Plan Intake,
+  Control API, run-scope, UI, and llama adapter set: **55 passed**. Full isolated suite: **286
+  passed** under `GIT_CONFIG_GLOBAL=/dev/null`. `compileall -q src tests benchmarks`,
+  `node --check web/app.js`, and `git diff --check` all pass. No commit was created.

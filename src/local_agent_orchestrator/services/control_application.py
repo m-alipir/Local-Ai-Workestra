@@ -27,6 +27,7 @@ from local_agent_orchestrator.services.resume import (
 )
 from local_agent_orchestrator.services.run_state import RunStateManager
 from local_agent_orchestrator.services.run_diagnostics import collect_run_diagnostics
+from local_agent_orchestrator.services.run_history import RunHistory
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -63,6 +64,66 @@ class ControlApplication:
 
     def get_project(self, project_id: str) -> Project:
         return self.registry.get(project_id)
+
+    def update_project(
+        self,
+        project_id: str,
+        *,
+        name: str | None = None,
+        workspace_root: str | Path | None = None,
+        test_command: list[str] | tuple[str, ...] | None = None,
+    ) -> Project:
+        return self.registry.update(
+            project_id,
+            name=name,
+            workspace_root=workspace_root,
+            test_command=test_command,
+        )
+
+    def update_project_request(
+        self,
+        project_id: str | dict[str, object],
+        payload: dict[str, object] | None = None,
+    ) -> Project:
+        if payload is None:
+            if not isinstance(project_id, dict):
+                raise ValueError("project_id and request body are required.")
+            payload = project_id
+            project_id = payload.get("project_id")
+        if not isinstance(project_id, str) or not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
+        editable = {"name", "path", "test_argv"}
+        unknown = set(payload) - editable - {"project_id"}
+        if unknown:
+            raise ValueError(f"Unsupported project field: {sorted(unknown)[0]}")
+        if "project_id" in payload and payload["project_id"] != project_id:
+            raise ValueError("project_id does not match the project path.")
+        if not any(field in payload for field in editable):
+            raise ValueError("At least one project field is required.")
+
+        name = payload.get("name")
+        path = payload.get("path")
+        test_argv = payload.get("test_argv")
+        if "name" in payload and not isinstance(name, str):
+            raise ValueError("name must be a string.")
+        if "path" in payload and not isinstance(path, str):
+            raise ValueError("path must be a string.")
+        if "test_argv" in payload:
+            if not isinstance(test_argv, list) or not test_argv:
+                raise ValueError("test_argv must be a non-empty argv list.")
+            if any(not isinstance(item, str) or not item for item in test_argv):
+                raise ValueError("test_argv must contain only non-empty strings.")
+        return self.update_project(
+            project_id,
+            name=name,
+            workspace_root=path,
+            test_command=test_argv,
+        )
+
+    def delete_project(self, project_id: str, payload: dict[str, object] | None = None) -> Project:
+        if payload:
+            raise ValueError("Project deletion does not accept request fields.")
+        return self.registry.delete(project_id)
 
     def create_project_request(self, payload: dict[str, object]) -> Project:
         name = payload.get("name")
@@ -218,6 +279,24 @@ class ControlApplication:
         project, _ = self._find_run(run_id, project_id)
         return collect_run_diagnostics(self._run_dir(project, run_id))
 
+    def archive_run(
+        self,
+        run_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, object]:
+        project, _ = self._find_run(run_id, project_id)
+        destination = RunHistory(project.runs_dir).archive(run_id)
+        return {"run_id": run_id, "archived": True, "path": str(destination)}
+
+    def delete_run(
+        self,
+        run_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, object]:
+        project, _ = self._find_run(run_id, project_id)
+        RunHistory(project.runs_dir).delete(run_id)
+        return {"run_id": run_id, "deleted": True}
+
     def approve_run(
         self,
         run_id: str,
@@ -295,6 +374,9 @@ class ControlApplication:
             except json.JSONDecodeError:
                 continue
             if isinstance(event, dict):
+                event_run_id = event.get("run_id")
+                if event_run_id is not None and event_run_id != run_id:
+                    continue
                 event["id"] = event_id
                 events.append(event)
         return events

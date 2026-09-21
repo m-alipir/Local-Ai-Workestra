@@ -35,17 +35,21 @@ class ControlService(Protocol):
 
     def list_projects(self) -> Any: ...
 
+    def update_project_request(self, project_id: str, payload: dict[str, Any]) -> Any: ...
+
+    def delete_project(self, project_id: str, payload: dict[str, Any] | None = None) -> Any: ...
+
     def list_runs(self, **filters: Any) -> Any: ...
 
     def list_plans(self, project_id: str | None = None) -> Any: ...
 
-    def get_run(self, run_id: str) -> Any: ...
+    def get_run(self, run_id: str, project_id: str | None = None) -> Any: ...
 
-    def get_run_diagnostics(self, run_id: str) -> Any: ...
+    def get_run_diagnostics(self, run_id: str, project_id: str | None = None) -> Any: ...
 
-    def read_events(self, run_id: str, after_id: int = 0) -> Any: ...
+    def read_events(self, run_id: str, after_id: int = 0, project_id: str | None = None) -> Any: ...
 
-    def read_artifacts(self, run_id: str) -> Any: ...
+    def read_artifacts(self, run_id: str, project_id: str | None = None) -> Any: ...
 
 
 class FilesystemControlService:
@@ -70,18 +74,18 @@ class FilesystemControlService:
             if path.is_dir() and (path / "state.json").is_file()
         ] if self.runs_dir.is_dir() else []
 
-    def get_run(self, run_id: str) -> dict[str, Any]:
+    def get_run(self, run_id: str, project_id: str | None = None) -> dict[str, Any]:
         path = self._run_path(run_id) / "state.json"
         if not path.is_file():
             raise LookupError(f"Run not found: {run_id}")
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def get_run_diagnostics(self, run_id: str) -> dict[str, Any]:
+    def get_run_diagnostics(self, run_id: str, project_id: str | None = None) -> dict[str, Any]:
         from local_agent_orchestrator.services.run_diagnostics import collect_run_diagnostics
 
         return collect_run_diagnostics(self._run_path(run_id))
 
-    def read_events(self, run_id: str, after_id: int = 0) -> list[dict[str, Any]]:
+    def read_events(self, run_id: str, after_id: int = 0, project_id: str | None = None) -> list[dict[str, Any]]:
         path = self._run_path(run_id) / "trajectory.jsonl"
         if not path.is_file():
             if not self._run_path(run_id).is_dir():
@@ -101,7 +105,7 @@ class FilesystemControlService:
                 events.append(event)
         return events
 
-    def read_artifacts(self, run_id: str) -> list[dict[str, Any]]:
+    def read_artifacts(self, run_id: str, project_id: str | None = None) -> list[dict[str, Any]]:
         root = self._run_path(run_id)
         if not root.is_dir():
             raise LookupError(f"Run not found: {run_id}")
@@ -152,25 +156,67 @@ class ControlAPI:
             if method == "GET" and path == ("api", "runs"):
                 return self._json(HTTPStatus.OK, self._call("list_runs", **query))
             if method == "GET" and len(path) == 3 and path[:2] == ("api", "runs"):
-                return self._json(HTTPStatus.OK, self._call("get_run", path[2]))
+                kwargs = {"project_id": query["project_id"]} if "project_id" in query else {}
+                return self._json(HTTPStatus.OK, self._call("get_run", path[2], **kwargs))
             if method == "GET" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] == "diagnostics":
-                return self._json(HTTPStatus.OK, self._call("get_run_diagnostics", path[2]))
+                return self._json(
+                    HTTPStatus.OK,
+                    self._call(
+                        "get_run_diagnostics",
+                        path[2],
+                        **({"project_id": query["project_id"]} if "project_id" in query else {}),
+                    ),
+                )
             if method == "GET" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] == "artifacts":
-                return self._json(HTTPStatus.OK, self._call("read_artifacts", path[2]))
+                return self._json(
+                    HTTPStatus.OK,
+                    self._call(
+                        "read_artifacts",
+                        path[2],
+                        **({"project_id": query["project_id"]} if "project_id" in query else {}),
+                    ),
+                )
             if method == "GET" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] == "diff":
-                return self._json(HTTPStatus.OK, self._call("read_diff", path[2]))
+                return self._json(
+                    HTTPStatus.OK,
+                    self._call(
+                        "read_diff",
+                        path[2],
+                        **({"project_id": query["project_id"]} if "project_id" in query else {}),
+                    ),
+                )
             if method == "GET" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] == "events":
                 return self._events(path[2], headers, query)
 
-            payload = self._payload(body) if method == "POST" else None
+            payload = self._payload(body) if method in {"POST", "PATCH", "PUT", "DELETE"} else None
             if method == "POST" and path == ("api", "projects"):
                 return self._json(HTTPStatus.CREATED, self._call("create_project_request", payload))
+            if method in {"PATCH", "PUT"} and len(path) == 3 and path[:2] == ("api", "projects"):
+                return self._json(HTTPStatus.OK, self._call("update_project_request", path[2], payload))
+            if method == "DELETE" and len(path) == 3 and path[:2] == ("api", "projects"):
+                return self._json(HTTPStatus.OK, self._call("delete_project", path[2], payload))
             if method == "POST" and path == ("api", "plans", "import"):
                 return self._json(HTTPStatus.CREATED, self._call("import_plan", payload))
             if method == "POST" and len(path) == 4 and path[:2] == ("api", "plans") and path[3] == "compile":
                 return self._json(HTTPStatus.OK, self._call("compile_plan", path[2], payload))
             if method == "POST" and path == ("api", "runs"):
                 return self._submit("start_run", payload)
+            if method == "DELETE" and len(path) == 3 and path[:2] == ("api", "runs"):
+                return self._json(
+                    HTTPStatus.OK,
+                    self._call(
+                        "delete_run",
+                        path[2],
+                        project_id=query.get("project_id"),
+                    ),
+                )
+            if method == "POST" and len(path) == 4 and path[:3] == ("api", "runs", path[2]) and path[3] in {"archive", "cleanup"}:
+                action = "archive_run" if path[3] == "archive" else "delete_run"
+                values = payload or {}
+                return self._json(
+                    HTTPStatus.OK,
+                    self._call(action, path[2], project_id=values.get("project_id")),
+                )
             if method == "POST" and len(path) == 6 and path[:4] == ("api", "runs", path[2], "approvals") and path[5] in {"approve", "reject"}:
                 action = "approve_run" if path[5] == "approve" else "reject_run"
                 if action == "reject_run":
@@ -277,7 +323,8 @@ class ControlAPI:
             raise ValueError("Last-Event-ID must be an integer") from exc
         if after_id < 0:
             raise ValueError("Last-Event-ID must be non-negative")
-        events = self._call("read_events", run_id, after_id)
+        kwargs = {"project_id": query["project_id"]} if "project_id" in query else {}
+        events = self._call("read_events", run_id, after_id, **kwargs)
         if not isinstance(events, list):
             raise ValueError("Application service returned invalid events")
         chunks = []
@@ -337,6 +384,15 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._handle("POST")
+
+    def do_PUT(self) -> None:
+        self._handle("PUT")
+
+    def do_PATCH(self) -> None:
+        self._handle("PATCH")
+
+    def do_DELETE(self) -> None:
+        self._handle("DELETE")
 
     def _handle(self, method: str) -> None:
         try:

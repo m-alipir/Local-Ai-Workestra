@@ -105,3 +105,18 @@ def test_repeated_verification_uses_the_same_target_environment(tmp_path):
     assert calls[0][1] == calls[1][1] == tmp_path.resolve()
     assert calls[0][2] == calls[1][2]
     assert calls[0][2]["VIRTUAL_ENV"] == str(tmp_path / ".venv")
+
+
+def test_verification_environment_uses_only_target_pythonpath_and_disables_bytecode(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/orchestrator-only")
+
+    with patch(
+        "local_agent_orchestrator.services.test_runner.subprocess.run",
+        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+    ) as runner:
+        run_tests(tmp_path, ["python", "-c", "print('ok')"])
+
+    environment = runner.call_args.kwargs["env"]
+    assert environment["PYTHONPATH"] == str(tmp_path.resolve())
+    assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "/orchestrator-only" not in environment["PYTHONPATH"]

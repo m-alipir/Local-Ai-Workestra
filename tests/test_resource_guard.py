@@ -5,6 +5,7 @@ import pytest
 from local_agent_orchestrator.services.resource_guard import (
     ResourceGuardError,
     ResourceSnapshot,
+    _is_llama_process,
     assert_safe_to_start_model,
 )
 
@@ -44,6 +45,19 @@ def test_guard_blocks_existing_llama_process():
     ):
         with pytest.raises(ResourceGuardError):
             assert_safe_to_start_model(2.0, 1.0)
+
+
+def test_process_detection_uses_executable_not_shell_text():
+    assert _is_llama_process("llama-server", [])
+    assert _is_llama_process("python", ["/opt/llama", "serve"])
+    assert not _is_llama_process(
+        "bash",
+        ["bash", "-c", "pgrep -af llama-server"],
+    )
+    assert not _is_llama_process(
+        "python",
+        ["python", "-c", "print('llama-server')"],
+    )
 
 
 def test_guard_blocks_low_ram():

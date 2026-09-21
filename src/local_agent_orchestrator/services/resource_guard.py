@@ -20,18 +20,17 @@ class ResourceGuardError(RuntimeError):
 
 
 def _is_llama_process(name: str, cmdline: list[str]) -> bool:
-    text = " ".join([name, *cmdline]).lower()
+    executable_names = {
+        Path(value).name.lower()
+        for value in (name, *(cmdline[:1] if cmdline else []))
+        if value
+    }
+    if executable_names & {"llama-server", "llama-cli"}:
+        return True
 
-    return any(
-        marker in text
-        for marker in (
-            "llama-server",
-            "llama-cli",
-            "llama download",
-            "llama serve",
-            "llama cli",
-        )
-    )
+    first = Path(cmdline[0]).name.lower() if cmdline else ""
+    second = cmdline[1].lower() if len(cmdline) > 1 else ""
+    return first == "llama" and second in {"download", "serve", "cli"}
 
 
 def _read_int(path: Path) -> int | None:

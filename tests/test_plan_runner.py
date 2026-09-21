@@ -1,3 +1,4 @@
+import json
 import pytest
 import subprocess
 from pathlib import Path
@@ -130,3 +131,45 @@ def test_plan_stops_after_failed_task(tmp_path):
     assert result.passed is False
     assert result.completed_tasks == 1
     assert executor.call_count == 2
+
+
+def test_finalization_failure_is_published_as_failed_run(tmp_path):
+    plan = ExecutionPlan(
+        request="Finalize safely",
+        tasks=[PlanTask(description="Complete the task")],
+    )
+
+    observed = {}
+
+    def fail_finalization(*, run_dir, **_kwargs):
+        observed["status"] = json.loads(
+            (Path(run_dir) / "state.json").read_text(encoding="utf-8")
+        )["status"]
+        raise RuntimeError("retrospective backend failed")
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.plan_runner.execute_checkpointed_task",
+            return_value=make_checkpoint(True, "commit1"),
+        ),
+        patch(
+            "local_agent_orchestrator.services.plan_runner.finalize_run",
+            side_effect=fail_finalization,
+        ),
+    ):
+        result = run_execution_plan(
+            plan=plan,
+            workspace_root=tmp_path,
+            test_command=["pytest", "-q"],
+            runs_dir=tmp_path.parent / (tmp_path.name + "-runs"),
+        )
+
+    assert result.passed is False
+    assert observed["status"] == "running"
+    state = json.loads((result.run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["status"] == "failed"
+    events = [
+        json.loads(line)
+        for line in (result.run_dir / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["event"] == "finalization_failed" for event in events)

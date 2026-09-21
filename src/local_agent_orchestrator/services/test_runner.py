@@ -62,6 +62,11 @@ def verification_environment(root: Path) -> dict[str, str]:
         environment.pop("VIRTUAL_ENV", None)
 
     environment["PATH"] = os.pathsep.join(filtered_path)
+    # Keep flat-layout target modules importable without inheriting the
+    # orchestrator's PYTHONPATH, and prevent verification from dirtying the
+    # target with bytecode artifacts that the clean-workspace guard must reject.
+    environment["PYTHONPATH"] = str(root)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     return environment
 
 

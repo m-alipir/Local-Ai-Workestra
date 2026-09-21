@@ -208,7 +208,8 @@ def test_bootstrap_does_not_leak_orchestrator_environment(tmp_path, monkeypatch)
 
     assert observed["cwd"] == tmp_path.resolve()
     assert observed["env"].get("VIRTUAL_ENV") is None
-    assert observed["env"].get("PYTHONPATH") is None
+    assert observed["env"].get("PYTHONPATH") == str(tmp_path.resolve())
+    assert observed["env"].get("PYTHONDONTWRITEBYTECODE") == "1"
     assert observed["env"].get("UV_PROJECT_ENVIRONMENT") is None
     assert observed["env"].get("UV_PYTHON") is None
     assert str(orchestrator_bin) not in observed["env"]["PATH"].split(os.pathsep)

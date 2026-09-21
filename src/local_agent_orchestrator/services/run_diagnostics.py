@@ -77,7 +77,7 @@ def collect_run_diagnostics(
         "checkpoint": checkpoint,
         "artifacts": artifacts["names"],
         "artifacts_omitted": artifacts["omitted"],
-        "summary": _summary(run_id, failure_class, task),
+        "summary": _summary(run_id, failure_class, task, verifier),
         "source_errors": source_errors[:max_events],
     }
 
@@ -405,8 +405,25 @@ def _summary(
     run_id: str,
     failure_class: str,
     task: dict[str, Any] | None,
+    verifier: dict[str, Any],
 ) -> str:
     if failure_class == "none":
         return f"Run {run_id} passed."
     suffix = f" at task {task['id']}" if task else ""
-    return f"Run {run_id} failed ({failure_class}){suffix}."
+    summary = f"Run {run_id} failed ({failure_class}){suffix}."
+    classification = verifier.get("classification")
+    if isinstance(classification, str) and classification:
+        summary += f" Verification: {classification}."
+    text = str(verifier.get("stderr") or verifier.get("stdout") or "")
+    evidence = next(
+        (
+            line.strip()
+            for line in text.splitlines()
+            if line.strip()
+            and ("Error" in line or "ERROR" in line or "FAILED" in line)
+        ),
+        "",
+    )
+    if evidence:
+        summary += f" {evidence[:240]}"
+    return summary

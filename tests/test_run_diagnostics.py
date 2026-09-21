@@ -120,6 +120,7 @@ def test_collect_run_diagnostics_combines_bounded_failure_evidence(tmp_path):
     assert len(diagnostics["artifacts"]) == 2
     assert diagnostics["artifacts_omitted"] == 3
     assert diagnostics["summary"].startswith("Run run-123 failed")
+    assert "Verification: new_failures" in diagnostics["summary"]
 
 
 def test_collect_run_diagnostics_preserves_unlabelled_verifier_detail(tmp_path):

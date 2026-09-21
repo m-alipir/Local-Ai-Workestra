@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import threading
 from http.client import HTTPConnection
+from datetime import datetime, timedelta, timezone
 
 from local_agent_orchestrator.control_api import (
     ControlAPI,
     create_server,
 )
+from local_agent_orchestrator.services.control_application import ControlApplication
+from local_agent_orchestrator.services.project_registry import ProjectRegistry
+from local_agent_orchestrator.models.task import RunState, TaskStatus
 
 
 class FakeService:
@@ -197,6 +201,24 @@ def test_filesystem_service_exposes_structured_run_diagnostics(tmp_path):
     assert json.loads(content)["failure_class"] == "none"
 
 
+def test_filesystem_service_accepts_project_scoped_reads(tmp_path):
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "state.json").write_text(
+        json.dumps({"run_id": "run-1", "status": "passed", "tasks": []}),
+        encoding="utf-8",
+    )
+    api = ControlAPI(runs_dir=tmp_path / "runs")
+    try:
+        status, _, content = api.handle(
+            "GET", "/api/runs/run-1?project_id=project-1", {}
+        )
+    finally:
+        api.close()
+    assert status == 200
+    assert json.loads(content)["run_id"] == "run-1"
+
+
 def test_plan_list_routes_project_filter_to_application_service(tmp_path):
     class Service:
         def list_plans(self, project_id=None):
@@ -212,3 +234,122 @@ def test_plan_list_routes_project_filter_to_application_service(tmp_path):
 
     assert status == 200
     assert json.loads(content) == [{"id": "plan-1", "project_id": "project-1"}]
+
+
+def test_project_update_and_delete_routes_preserve_workspace(tmp_path):
+    repo = tmp_path / "repo"
+    new_repo = tmp_path / "new-repo"
+    repo.mkdir()
+    new_repo.mkdir()
+    app = ControlApplication(ProjectRegistry(tmp_path / "projects.json"))
+    project = app.create_project("Demo", repo, ["pytest"])
+    api = ControlAPI(app, runs_dir=tmp_path / "runs")
+    try:
+        status, _, body = api.handle(
+            "PATCH",
+            f"/api/projects/{project.id}",
+            {},
+            json.dumps({"test_argv": ["python", "-m", "pytest"]}).encode(),
+        )
+        assert status == 200
+        verifier_only = json.loads(body)
+        assert verifier_only["name"] == "Demo"
+        assert verifier_only["path"] == str(repo.resolve())
+        assert verifier_only["test_command"] == ["python", "-m", "pytest"]
+
+        status, _, body = api.handle(
+            "PATCH",
+            f"/api/projects/{project.id}",
+            {},
+            json.dumps({
+                "name": "Renamed",
+                "path": str(new_repo),
+                "test_argv": ["python", "-m", "pytest"],
+            }).encode(),
+        )
+        assert status == 200
+        updated = json.loads(body)
+        assert updated["name"] == "Renamed"
+        assert updated["path"] == str(new_repo.resolve())
+        assert updated["test_command"] == ["python", "-m", "pytest"]
+
+        status, _, body = api.handle(
+            "DELETE", f"/api/projects/{project.id}", {}, b""
+        )
+        assert status == 200
+        assert json.loads(body)["id"] == project.id
+        assert repo.is_dir()
+        assert new_repo.is_dir()
+        assert app.list_projects() == []
+    finally:
+        api.close()
+
+
+def test_project_update_route_rejects_shell_verifier(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app = ControlApplication(ProjectRegistry(tmp_path / "projects.json"))
+    project = app.create_project("Demo", repo, ["pytest"])
+    api = ControlAPI(app)
+    try:
+        status, _, body = api.handle(
+            "PUT",
+            f"/api/projects/{project.id}",
+            {},
+            json.dumps({"test_argv": "pytest -q"}).encode(),
+        )
+    finally:
+        api.close()
+    assert status == 400
+    assert b"test_argv" in body
+
+
+def test_run_cleanup_route_removes_only_terminal_control_artifact(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    marker = repo / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    app = ControlApplication(ProjectRegistry(tmp_path / "projects.json"))
+    project = app.create_project("Demo", repo, ["pytest"])
+    run_dir = project.runs_dir / "failed-run"
+    run_dir.mkdir(parents=True)
+    state = RunState(
+        run_id="failed-run",
+        request="disposable failure",
+        status=TaskStatus.FAILED,
+        updated_at=datetime.now(timezone.utc) - timedelta(days=2),
+    )
+    (run_dir / "state.json").write_text(state.model_dump_json(), encoding="utf-8")
+    (run_dir / "trajectory.jsonl").write_text("failure\n", encoding="utf-8")
+    archived_dir = project.runs_dir / "archived-run"
+    archived_dir.mkdir(parents=True)
+    (archived_dir / "state.json").write_text(
+        state.model_copy(update={"run_id": "archived-run"}).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    api = ControlAPI(app)
+    try:
+        status, _, raw = api.handle(
+            "POST",
+            "/api/runs/archived-run/archive",
+            {},
+            json.dumps({"project_id": project.id}).encode(),
+        )
+        result = json.loads(raw)
+        assert status == 200 and result["archived"] is True
+        assert (project.runs_dir / ".archive" / "archived-run" / "state.json").is_file()
+
+        status, _, body = api.handle(
+            "POST",
+            "/api/runs/failed-run/cleanup",
+            {},
+            json.dumps({"project_id": project.id}).encode(),
+        )
+    finally:
+        api.close()
+
+    assert status == 200
+    assert json.loads(body) == {"run_id": "failed-run", "deleted": True}
+    assert not run_dir.exists()
+    assert marker.read_text(encoding="utf-8") == "keep"

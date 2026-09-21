@@ -396,14 +396,54 @@ def run_execution_plan(
         completed_tasks += 1
 
     passed = passed and completed_tasks == len(plan.tasks)
-    manager.finish_run(state, passed)
-
     run_dir = manager.get_run_dir(state.run_id)
-    finalization: FinalizationResult = finalize_run(
-        run_id=state.run_id,
-        run_dir=run_dir,
-        analytics_dir=analytics_dir,
+    # Task failures update the run status eagerly so dependency propagation is
+    # durable. Hide that intermediate terminal value while finalization owns
+    # model cleanup; terminal state is published only after it returns.
+    state.status = TaskStatus.RUNNING
+    manager.save(state)
+    append_trajectory_event(
+        run_dir,
+        TrajectoryEvent(
+            run_id=state.run_id,
+            task_id=state.current_task or "run",
+            event="finalization_started",
+            passed=None,
+            detail="Analytics and retrospective finalization started.",
+        ),
     )
+    try:
+        finalization: FinalizationResult = finalize_run(
+            run_id=state.run_id,
+            run_dir=run_dir,
+            analytics_dir=analytics_dir,
+        )
+    except Exception as exc:
+        append_trajectory_event(
+            run_dir,
+            TrajectoryEvent(
+                run_id=state.run_id,
+                task_id=state.current_task or "run",
+                event="finalization_failed",
+                passed=False,
+                detail=str(exc),
+            ),
+        )
+        manager.finish_run(state, False)
+        return PlanRunResult(
+            run_id=state.run_id,
+            passed=False,
+            completed_tasks=completed_tasks,
+            total_tasks=len(plan.tasks),
+            commits=commits,
+            run_dir=run_dir,
+            analytics_path=None,
+            retrospective_path=None,
+        )
+
+    # Publish terminal state only after analytics/retrospective generation and
+    # model cleanup have completed, so another run cannot overlap finalization.
+    manager.finish_run(state, passed)
 
     return PlanRunResult(
         run_id=state.run_id,
