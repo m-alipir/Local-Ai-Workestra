@@ -41,13 +41,14 @@ def extract_patch_paths(patch: str) -> tuple[list[str], set[str]]:
         block = patch[header.start():block_end]
         old_is_null = "--- /dev/null" in block
         new_is_null = "+++ /dev/null" in block
+        is_new_file = old_is_null or "new file mode " in block
 
         if not old_is_null and old_path not in paths:
             paths.append(old_path)
         if not new_is_null and new_path not in paths:
             paths.append(new_path)
 
-        if old_is_null and not new_is_null:
+        if is_new_file and not new_is_null:
             new_paths.add(new_path)
 
     return paths, new_paths

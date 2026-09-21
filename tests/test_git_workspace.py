@@ -104,7 +104,7 @@ def test_checkpoint_uses_fallback_identity_without_git_config(tmp_path):
 
     for key in ("user.name", "user.email"):
         configured = subprocess.run(
-            ["git", "config", "--get", key],
+            ["git", "config", "--local", "--get", key],
             cwd=tmp_path,
             capture_output=True,
             text=True,
@@ -121,7 +121,7 @@ def test_checkpoint_does_not_hide_git_config_lookup_failure(tmp_path):
     real_run = workspace._run
 
     def fake_run(*args, **kwargs):
-        if args[:2] == ("config", "--get"):
+        if args[:3] == ("config", "--local", "--get"):
             return subprocess.CompletedProcess(
                 args=["git", *args],
                 returncode=2,

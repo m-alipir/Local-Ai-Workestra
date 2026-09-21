@@ -44,6 +44,9 @@ For replace_exact and delete_file, use only an observed existing path.
 Copy replace_exact.old_text as one exact contiguous excerpt from the evidence;
 if the exact excerpt is not present, do not guess it.
 For create_file, use a new workspace-relative path and provide complete content.
+New-file content must not contain trailing spaces or tabs; blank lines must be
+empty. Preserve meaningful whitespace in the file rather than guessing or
+normalizing it.
 """
 
 

@@ -133,6 +133,85 @@ def test_compile_plan_uses_bonsai_and_validates_candidate():
     )
 
 
+def test_compile_plan_rejects_test_execution_without_code_prerequisite():
+    server = MagicMock()
+    server.__enter__.return_value = server
+    server.chat.return_value = json.dumps(
+        {
+            "request": "Build and test a feature",
+            "tasks": [
+                {
+                    "id": "verify",
+                    "description": "Run the trusted test suite",
+                    "kind": "test",
+                    "depends_on": [],
+                },
+                {
+                    "id": "implement",
+                    "description": "Implement the feature and create test files",
+                    "kind": "code",
+                    "depends_on": [],
+                },
+            ],
+        }
+    )
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.plan_intake.load_settings",
+            return_value=_settings(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.plan_intake.load_models",
+            return_value=MagicMock(models={"bonsai2": _bonsai()}),
+        ),
+        patch(
+            "local_agent_orchestrator.services.plan_intake.LlamaServer",
+            return_value=server,
+        ),
+    ):
+        result = compile_plan("# Build and test\nImplement the feature.")
+
+    assert result.status == "failed"
+    assert "must depend on at least one code task" in (result.error or "")
+
+
+def test_compile_plan_rejects_test_creation_misclassified_as_execution():
+    server = MagicMock()
+    server.__enter__.return_value = server
+    server.chat.return_value = json.dumps(
+        {
+            "request": "Add tests",
+            "tasks": [
+                {
+                    "id": "tests",
+                    "description": "Add automated tests for the endpoint",
+                    "kind": "test",
+                }
+            ],
+        }
+    )
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.plan_intake.load_settings",
+            return_value=_settings(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.plan_intake.load_models",
+            return_value=MagicMock(models={"bonsai2": _bonsai()}),
+        ),
+        patch(
+            "local_agent_orchestrator.services.plan_intake.LlamaServer",
+            return_value=server,
+        ),
+    ):
+        result = compile_plan("# Add tests\nAdd endpoint tests.")
+
+    assert result.status == "failed"
+    assert "describes creating tests" in (result.error or "")
+
+
 def test_compile_plan_returns_controlled_failure_when_model_unavailable():
     with (
         patch(
@@ -403,6 +482,7 @@ def test_compile_plan_rejects_invalid_dependency_graph():
 
     assert result.status == "failed"
     assert "unknown task" in result.error
+    assert "known IDs: a" in result.error
 
 
 def test_compile_plan_keeps_verification_as_metadata():

@@ -42,6 +42,7 @@ def collect_run_diagnostics(
         metrics,
         event_facts["verifier_details"],
         max_text_chars,
+        task,
     )
     model_errors = _model_errors(
         metrics,
@@ -170,7 +171,7 @@ def _read_events(
             checkpoint_failed = True
         elif event_name == "checkpoint_created":
             checkpoint_created = True
-            commit = commit or _commit_from_detail(detail)
+            commit = _commit_from_detail(detail) or commit
         elif event_name == "rollback":
             rollback_observed = True
 
@@ -216,7 +217,7 @@ def _compact_event(
 
 def _compact_model_error(event: dict[str, Any], max_text_chars: int) -> dict[str, Any]:
     error: dict[str, Any] = {"event": event.get("event")}
-    for key in ("model", "attempt", "failure_class"):
+    for key in ("task_id", "model", "attempt", "failure_class"):
         if event.get(key) is not None:
             error[key] = event[key]
     if isinstance(event.get("detail"), str):
@@ -228,7 +229,7 @@ def _is_model_error(event_name: str, event: dict[str, Any]) -> bool:
     return bool(
         event.get("failure_class")
         or event_name in {"task_exception", "model_error", "backend_error"}
-        or event_name.startswith("model_")
+        or event_name == "model_attempt_failed"
         or event_name == "coding_output_rejected"
     ) and "verification" not in event_name
 
@@ -258,6 +259,7 @@ def _verifier_evidence(
     metrics: list[dict[str, Any]],
     event_details: list[str],
     max_text_chars: int,
+    task: dict[str, str] | None,
 ) -> dict[str, Any]:
     stdout = ""
     stderr = ""
@@ -277,7 +279,18 @@ def _verifier_evidence(
         event_stdout, event_stderr, event_returncode = _read_streams(detail)
         stdout, stderr = event_stdout or stdout, event_stderr or stderr
         returncode = event_returncode if event_returncode is not None else returncode
-    metric = metrics[-1] if metrics else {}
+    metric = {}
+    if task:
+        metric = next(
+            (
+                candidate
+                for candidate in reversed(metrics)
+                if candidate.get("task_id") == task.get("id")
+            ),
+            {},
+        )
+    elif metrics:
+        metric = metrics[-1]
     if isinstance(metric.get("test_returncode"), int):
         returncode = metric["test_returncode"]
     if not stdout and not stderr and raw_detail:
@@ -304,6 +317,8 @@ def _model_errors(
             if not isinstance(failure, dict):
                 continue
             item = {"event": "operation_failure"}
+            if metric.get("task_id") is not None:
+                item["task_id"] = metric["task_id"]
             for key in ("model", "attempt", "failure_class"):
                 if failure.get(key) is not None:
                     item[key] = failure[key]
@@ -321,7 +336,7 @@ def _checkpoint_state(
     commit = facts["commit"]
     for metric in metrics:
         if isinstance(metric.get("commit"), str):
-            commit = commit or metric["commit"]
+            commit = metric["commit"]
     failed = facts["checkpoint_failed"] or (
         isinstance(task, dict)
         and "checkpoint" in str(task.get("error", "")).lower()
@@ -344,13 +359,32 @@ def _failure_class(
     facts: dict[str, Any],
 ) -> str:
     status = str(state.get("status") or "unknown")
+    if status in {"pending", "running", "waiting_for_approval"}:
+        return "in_progress"
     if status == "passed":
         return "none"
     if checkpoint["failed"]:
         return "checkpoint_failure"
-    if any(metric.get("operation_failures") for metric in metrics):
+    if _task_verification_failed(state, task):
+        return "verification_failure"
+    current_task_id = task.get("id") if task else None
+    current_metrics = (
+        [metric for metric in metrics if metric.get("task_id") == current_task_id]
+        if current_task_id
+        else metrics
+    )
+    current_model_errors = (
+        [
+            error
+            for error in model_errors
+            if not error.get("task_id") or error.get("task_id") == current_task_id
+        ]
+        if current_task_id
+        else model_errors
+    )
+    if any(metric.get("operation_failures") for metric in current_metrics):
         return "operation_failure"
-    if facts["model_errors"] or model_errors:
+    if current_model_errors:
         return "model_or_backend_error"
     if verifier["returncode"] not in {None, 0} or verifier["classification"]:
         return "verification_failure"
@@ -359,6 +393,18 @@ def _failure_class(
     if task and task.get("status") == "failed":
         return "task_failure"
     return "unknown_failure"
+
+
+def _task_verification_failed(
+    state: dict[str, Any],
+    task: dict[str, str] | None,
+) -> bool:
+    if not task:
+        return False
+    for value in state.get("tasks", []):
+        if isinstance(value, dict) and value.get("id") == task.get("id"):
+            return value.get("verification_status") == "failed"
+    return False
 
 
 def _failing_task(state: dict[str, Any]) -> dict[str, str] | None:
@@ -409,20 +455,22 @@ def _summary(
 ) -> str:
     if failure_class == "none":
         return f"Run {run_id} passed."
+    if failure_class == "in_progress":
+        return f"Run {run_id} is still in progress."
     suffix = f" at task {task['id']}" if task else ""
     summary = f"Run {run_id} failed ({failure_class}){suffix}."
     classification = verifier.get("classification")
     if isinstance(classification, str) and classification:
         summary += f" Verification: {classification}."
     text = str(verifier.get("stderr") or verifier.get("stdout") or "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     evidence = next(
         (
-            line.strip()
-            for line in text.splitlines()
-            if line.strip()
-            and ("Error" in line or "ERROR" in line or "FAILED" in line)
+            line
+            for line in lines
+            if "Error" in line or "ERROR" in line or "FAILED" in line
         ),
-        "",
+        lines[0] if lines else "",
     )
     if evidence:
         summary += f" {evidence[:240]}"

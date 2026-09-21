@@ -21,6 +21,10 @@ def failed_result(*identities: str) -> CommandResult:
     return CommandResult(False, 1, stdout + "\n", "")
 
 
+def no_tests_result() -> CommandResult:
+    return CommandResult(False, 5, "\nno tests ran in 0.00s\n", "")
+
+
 def summary(command, result):
     return summarize_verification(command, result)
 
@@ -101,6 +105,39 @@ def test_preexisting_failure_disappearing_is_allowed():
     assert decision.classification == "baseline_failures_disappeared"
 
 
+def test_pytest_no_tests_result_is_a_structured_interpretable_baseline():
+    parsed = summary(["python", "-m", "pytest", "-q"], no_tests_result())
+
+    assert parsed.interpretable is True
+    assert parsed.failure_identities == ("pytest:no_tests_collected",)
+    assert parsed.detail == "pytest failure identities parsed"
+
+
+def test_matching_no_tests_baseline_is_allowed_as_preexisting():
+    parsed_baseline = summary(["pytest", "-q"], no_tests_result())
+    parsed_post_change = summary(["pytest", "-q"], no_tests_result())
+
+    decision = compare_verification(parsed_baseline, parsed_post_change)
+
+    assert decision.allowed is True
+    assert decision.classification == "preexisting_failures_only"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        CommandResult(False, 5, "", ""),
+        CommandResult(False, 5, "INTERNAL ERROR: worker crashed\n", ""),
+        CommandResult(False, 1, "no tests ran in 0.00s\n", ""),
+    ],
+)
+def test_noncanonical_no_tests_results_still_fail_closed(result):
+    parsed = summary(["pytest", "-q"], result)
+
+    assert parsed.interpretable is False
+    assert compare_verification(parsed, parsed).allowed is False
+
+
 def test_unparseable_verification_failure_fails_closed():
     result = CommandResult(False, 2, "INTERNAL ERROR: worker crashed\n", "")
     parsed = summary(["pytest", "-q"], result)
@@ -133,6 +170,17 @@ def test_baseline_uses_exact_workspace_and_command(tmp_path):
         ["uv", "run", "pytest", "-q"],
         timeout=120,
     )
+
+
+def test_baseline_accepts_canonical_pytest_no_tests_result(tmp_path):
+    with patch(
+        "local_agent_orchestrator.services.verification_triage.run_tests",
+        return_value=no_tests_result(),
+    ):
+        baseline = establish_baseline(tmp_path, ["python", "-m", "pytest", "-q"])
+
+    assert baseline.interpretable is True
+    assert baseline.failure_identities == ("pytest:no_tests_collected",)
 
 
 def _git(root, *args):

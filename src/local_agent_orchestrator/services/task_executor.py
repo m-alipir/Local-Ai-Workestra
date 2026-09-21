@@ -74,6 +74,8 @@ def _operation_failure_class(exc: Exception) -> str:
     if isinstance(exc, EditOperationError):
         return exc.failure_class
     if isinstance(exc, (DiffPatchError, PatchError)):
+        if "trailing whitespace" in str(exc).lower():
+            return "whitespace_error"
         return "patch_validation_failure"
     if isinstance(exc, ValueError):
         return "invalid_schema"
@@ -84,6 +86,17 @@ def _tail(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return "...[truncated]\n" + text[-limit:]
+
+
+def _operation_retry_guidance(failure_class: str) -> str:
+    if failure_class == "whitespace_error":
+        return (
+            "\n\nWHITESPACE GUIDANCE: Regenerate only the affected create_file "
+            "content with no trailing spaces or tabs on any line. Blank lines "
+            "must contain no indentation. Preserve the requested file content "
+            "and do not normalize existing-file replacements."
+        )
+    return ""
 
 
 def _test_detail(result: CommandResult) -> str:
@@ -292,6 +305,7 @@ def execute_task_with_retries(
                     f"{failure['detail']}\n"
                     "Correct exactly this failure using the authoritative "
                     "repository evidence above."
+                    + _operation_retry_guidance(failure["failure_class"])
                 )
 
         try:
@@ -438,6 +452,7 @@ def execute_task_with_retries(
             f"{failure['detail']}\n"
             "Correct exactly this failure using the authoritative repository "
             "evidence supplied to your coder context."
+            + _operation_retry_guidance(failure["failure_class"])
         )
 
     if event_callback:

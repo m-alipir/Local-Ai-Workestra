@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from local_agent_orchestrator.models.plan import ExecutionPlan, PlanTask
@@ -18,12 +19,22 @@ _SUPPORTED_KINDS = {
     "manual",
 }
 _SUPPORTED_RISKS = {"low", "medium", "high", "critical"}
+_TEST_CREATION = re.compile(
+    r"\b(?:add|create|write|implement|author|generate|build)\b"
+    r"[^.\n]{0,100}\btests?\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ValidatedPlan:
     effective_ids: tuple[str, ...]
     order: tuple[int, ...]
+
+
+def describes_test_creation(description: str) -> bool:
+    """Return whether a task clearly asks to create or edit test files."""
+    return bool(_TEST_CREATION.search(description))
 
 
 def _effective_task_id(task: PlanTask, generated_id: str) -> str:
@@ -62,6 +73,15 @@ def validate_plan(
 
     known_ids = set(effective_ids)
     indices = {task_id: index for index, task_id in enumerate(effective_ids)}
+    code_ids = {
+        effective_id
+        for effective_id, task in zip(
+            effective_ids,
+            plan.tasks,
+            strict=True,
+        )
+        if task.kind == "code"
+    }
     dependents: dict[str, list[int]] = {
         task_id: [] for task_id in effective_ids
     }
@@ -74,6 +94,12 @@ def validate_plan(
             raise PlanValidationError(
                 f"Task {effective_id} has unsupported kind {task.kind!r}."
             )
+        if task.kind == "test" and describes_test_creation(task.description):
+            raise PlanValidationError(
+                f"Task {effective_id} describes creating tests but is classified "
+                "as test execution; use kind='code' for test-file changes and "
+                "a separate kind='test' task to run the verifier."
+            )
         if task.risk not in _SUPPORTED_RISKS:
             raise PlanValidationError(
                 f"Task {effective_id} has unsupported risk {task.risk!r}."
@@ -82,13 +108,26 @@ def validate_plan(
         for dependency in dependencies:
             if dependency not in known_ids:
                 raise PlanValidationError(
-                    f"{effective_id} depends on unknown task {dependency}."
+                    f"{effective_id} depends on unknown task {dependency!r}; "
+                    "depends_on must contain exact task IDs (known IDs: "
+                    + ", ".join(effective_ids)
+                    + ")."
                 )
             if dependency == effective_id:
                 raise PlanValidationError(
                     f"{effective_id} cannot depend on itself."
                 )
             dependents[dependency].append(index)
+        if (
+            task.kind == "test"
+            and code_ids
+            and not any(dependency in code_ids for dependency in dependencies)
+        ):
+            raise PlanValidationError(
+                f"Task {effective_id} is verifier-only and must depend on "
+                "at least one code task that creates or updates the files it "
+                "verifies."
+            )
         indegree.append(len(dependencies))
 
     ready = [index for index, degree in enumerate(indegree) if degree == 0]

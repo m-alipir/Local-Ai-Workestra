@@ -127,6 +127,35 @@ def test_invalid_dependency_graph_fails_before_execution(tasks, message):
         validate_plan(ExecutionPlan(request="invalid", tasks=tasks))
 
 
+def test_test_execution_rejects_test_creation_description():
+    with pytest.raises(PlanValidationError, match="describes creating tests"):
+        validate_plan(
+            ExecutionPlan(
+                request="invalid task kind",
+                tasks=[
+                    PlanTask(
+                        id="tests",
+                        description="Create automated tests",
+                        kind="test",
+                    )
+                ],
+            )
+        )
+
+
+def test_test_execution_requires_code_prerequisite():
+    with pytest.raises(PlanValidationError, match="must depend on at least one code task"):
+        validate_plan(
+            ExecutionPlan(
+                request="missing test prerequisite",
+                tasks=[
+                    PlanTask(id="implement", description="Implement the feature"),
+                    PlanTask(id="verify", description="Run the trusted test suite", kind="test"),
+                ],
+            )
+        )
+
+
 def test_failed_dependency_blocks_dependent_task(tmp_path):
     _init_repo(tmp_path)
     plan = ExecutionPlan(

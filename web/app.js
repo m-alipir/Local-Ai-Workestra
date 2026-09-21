@@ -1,6 +1,6 @@
 const PLAN_STORAGE_KEY = "workestra.plans";
 const SELECTED_PLAN_STORAGE_KEY = "workestra.selected-plans";
-const state = { projectId: null, planId: null, runId: null, projects: [], projectEditMode: false, projectEditOriginal: null, selectedRunToken: 0, eventSource: null };
+const state = { projectId: null, planId: null, runId: null, currentTaskId: null, lastEventId: 0, projects: [], projectEditMode: false, projectEditOriginal: null, selectedRunToken: 0, eventSource: null };
 const $ = (id) => document.getElementById(id);
 
 function readStorage(key, fallback) {
@@ -53,6 +53,141 @@ function parseVerifierArgv(value) {
   return argv;
 }
 
+function setStatus(id, value, status = "unknown") {
+  const element = $(id);
+  element.textContent = value;
+  element.dataset.status = status;
+  if (id === "health") {
+    const dot = document.querySelector(".health-dot");
+    if (dot) dot.dataset.status = status;
+  }
+}
+
+function textElement(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function renderPlanPreview(plan) {
+  const preview = $("plan-preview");
+  preview.replaceChildren();
+  const raw = plan && typeof plan === "object" ? plan : { value: plan };
+  const compiledPlan = raw.plan && typeof raw.plan === "object" ? raw.plan : raw;
+  const tasks = Array.isArray(compiledPlan.tasks) ? compiledPlan.tasks : [];
+  const summary = textElement("div", "preview-summary");
+  const stats = [
+    [String(tasks.length), "tasks"],
+    [tasks.filter((task) => task.requires_approval).length.toString(), "approval gates"],
+    [tasks.filter((task) => ["high", "critical"].includes(task.risk)).length.toString(), "high-risk"],
+  ];
+  for (const [value, label] of stats) {
+    const stat = textElement("div", "preview-stat");
+    stat.append(textElement("strong", "", value), textElement("span", "", label));
+    summary.append(stat);
+  }
+  preview.append(summary);
+  if (compiledPlan.request) preview.append(textElement("p", "preview-request", compiledPlan.request));
+  const taskList = textElement("div", "preview-tasks");
+  tasks.forEach((task, index) => {
+    const item = textElement("div", "preview-task");
+    const copy = textElement("div", "preview-task-copy");
+    copy.append(
+      textElement("strong", "", task.description || task.id || `Task ${index + 1}`),
+      textElement("span", "", [task.kind, task.risk, task.requires_approval ? "approval required" : "no approval"].filter(Boolean).join(" · ")),
+    );
+    item.append(textElement("span", "preview-task-index", String(index + 1).padStart(2, "0")), copy);
+    taskList.append(item);
+  });
+  if (tasks.length) preview.append(taskList);
+  const rawDetails = document.createElement("details");
+  rawDetails.className = "raw-fallback";
+  rawDetails.append(textElement("summary", "", "Raw compiled plan"));
+  rawDetails.append(textElement("pre", "output", JSON.stringify(raw, null, 2)));
+  preview.append(rawDetails);
+}
+
+function renderRunList(items) {
+  const list = $("run-list");
+  list.replaceChildren();
+  if (!items.length) {
+    list.append(textElement("p", "empty-state", "No runs."));
+    return;
+  }
+  for (const run of items) {
+    const runId = run.run_id || run.id;
+    const status = run.status || "unknown";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "run-list-item";
+    button.dataset.runId = runId;
+    button.dataset.status = status;
+    button.setAttribute("aria-current", runId === state.runId ? "true" : "false");
+    button.append(
+      textElement("span", "run-list-title", run.request || runId),
+      (() => {
+        const meta = textElement("span", "run-list-meta");
+        meta.append(textElement("span", "", runId), textElement("span", "", status.replaceAll("_", " ")));
+        return meta;
+      })(),
+    );
+    button.onclick = () => selectRun(runId);
+    list.append(button);
+  }
+}
+
+function syncRunListSelection() {
+  for (const button of document.querySelectorAll("#run-list .run-list-item")) {
+    button.setAttribute("aria-current", button.dataset.runId === state.runId ? "true" : "false");
+  }
+}
+
+function renderTask(task, index) {
+  const status = task.status || "pending";
+  const item = textElement("article", "task");
+  item.dataset.status = status;
+  item.setAttribute("role", "listitem");
+  const header = textElement("div", "task-header");
+  header.append(
+    textElement("strong", "task-title", `${task.id || `Task ${index + 1}`} · ${task.description || "Untitled task"}`),
+    textElement("span", "badge", status.replaceAll("_", " ")),
+  );
+  header.lastChild.dataset.status = status;
+  item.append(header);
+  if (task.error) item.append(textElement("p", "task-copy", task.error));
+  const meta = [
+    task.kind,
+    task.attempts ? `${task.attempts} attempt${task.attempts === 1 ? "" : "s"}` : null,
+    task.approval_granted ? "approval granted" : (status === "waiting_for_approval" ? "approval required" : null),
+    task.verification_status && task.verification_status !== "not_requested" ? task.verification_status.replaceAll("_", " ") : null,
+  ].filter(Boolean);
+  if (meta.length) item.append(textElement("div", "task-meta", meta.join(" · ")));
+  return item;
+}
+
+function renderTaskList(tasks) {
+  const list = $("task-list");
+  list.replaceChildren();
+  if (!tasks.length) list.append(textElement("p", "empty-state", "No tasks recorded for this run."));
+  else tasks.forEach((task, index) => list.append(renderTask(task, index)));
+}
+
+function eventsQuery(projectId, lastEventId = 0) {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  if (lastEventId > 0) params.set("last_event_id", String(lastEventId));
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function lastEventIdFromStream(stream) {
+  return [...stream.matchAll(/^id:\s*(\d+)\s*$/gm)]
+    .map((match) => Number(match[1]))
+    .filter(Number.isSafeInteger)
+    .pop() || 0;
+}
+
 function selectedProject() { return $("project-select").value || state.projectId; }
 
 function selectedProjectRecord() {
@@ -70,6 +205,8 @@ function syncRunActions() {
   const status = $("run-status").textContent;
   const terminal = ["passed", "failed", "skipped"].includes(status);
   const waitingForApproval = status === "waiting_for_approval";
+  $("resume-run").textContent = waitingForApproval ? "Approve & resume" : "Resume";
+  $("resume-run").setAttribute("aria-label", waitingForApproval ? "Approve current task and resume run" : "Resume run");
   $("resume-run").disabled = !hasRun || !waitingForApproval;
   // The synchronous engine has no safe pause/cancel primitive yet.
   $("pause-run").disabled = true;
@@ -107,7 +244,7 @@ function renderPlanHistory() {
   if (!plans.length) {
     select.add(new Option("No saved plans", ""));
     $("reuse-plan").disabled = true;
-    $("plan-status").textContent = "No plan selected";
+    setStatus("plan-status", "No plan selected", "idle");
     return;
   }
   for (const plan of plans) {
@@ -119,7 +256,7 @@ function renderPlanHistory() {
   select.value = plans.some((plan) => plan.id === preferred) ? preferred : plans[0].id;
   state.planId = select.value;
   $("reuse-plan").disabled = false;
-  $("plan-status").textContent = "Saved plan selected";
+  setStatus("plan-status", "Saved plan selected", "saved");
 }
 
 function rememberPlan(record) {
@@ -169,16 +306,23 @@ function clearRunDetail() {
   if (state.eventSource) state.eventSource.close();
   state.eventSource = null;
   state.runId = null;
+  state.currentTaskId = null;
+  state.lastEventId = 0;
+  syncRunListSelection();
   $("run-detail").hidden = true;
   $("run-heading").textContent = "";
-  $("run-status").textContent = "";
+  setStatus("run-status", "", "unknown");
   $("task-list").replaceChildren();
   $("timeline").textContent = "";
   $("run-artifacts").textContent = "";
+  clearDiagnostics();
+  syncRunActions();
+}
+
+function clearDiagnostics() {
   $("diagnostics").hidden = true;
   $("diagnostic-summary").textContent = "";
   $("diagnostic-details").textContent = "";
-  syncRunActions();
 }
 
 function invalidateRunSelection() {
@@ -201,18 +345,13 @@ async function refreshRuns(token = state.selectedRunToken) {
     return;
   }
   if (token !== state.selectedRunToken) return;
-  const list = $("run-list");
   const items = Array.isArray(runs.data || runs) ? (runs.data || runs) : [];
-  list.replaceChildren(...(items.length ? items.map((run) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = `${run.run_id || run.id} · ${run.status || "unknown"}`;
-    button.onclick = () => selectRun(run.run_id || run.id);
-    return button;
-  }) : [Object.assign(document.createElement("p"), { textContent: "No runs." })]));
+  renderRunList(items);
   const selected = items.find((run) => (run.run_id || run.id) === state.runId);
   if (selected && token === state.selectedRunToken) {
-    $("run-status").textContent = selected.status || "unknown";
+    state.currentTaskId = selected.current_task || null;
+    setStatus("run-status", selected.status || "unknown", selected.status || "unknown");
+    if (["pending", "running", "waiting_for_approval"].includes(selected.status)) clearDiagnostics();
     syncRunActions();
   }
 }
@@ -221,6 +360,7 @@ async function selectRun(runId) {
   const token = ++state.selectedRunToken;
   clearRunDetail();
   state.runId = runId;
+  syncRunListSelection();
   try {
     const projectId = selectedProject();
     const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
@@ -228,18 +368,15 @@ async function selectRun(runId) {
     if (!isCurrentRun(runId, token)) return;
     $("run-detail").hidden = false;
     $("run-heading").textContent = `Run ${run.run_id || run.id}`;
-    $("run-status").textContent = run.status || "unknown";
+    state.currentTaskId = run.current_task || null;
+    setStatus("run-status", run.status || "unknown", run.status || "unknown");
     syncRunActions();
-    $("task-list").replaceChildren(...(run.tasks || []).map((task) => {
-      const item = document.createElement("div");
-      item.className = "task";
-      item.textContent = `${task.id}: ${task.status} — ${task.description}`;
-      return item;
-    }));
-    const eventsResponse = await fetch(`/api/runs/${encodeURIComponent(runId)}/events${query}`);
+    renderTaskList(Array.isArray(run.tasks) ? run.tasks : []);
+    const eventsResponse = await fetch(`/api/runs/${encodeURIComponent(runId)}/events${eventsQuery(projectId, state.lastEventId)}`);
     if (!eventsResponse.ok) throw new Error(`Unable to load run events (${eventsResponse.status})`);
     const timeline = await eventsResponse.text();
     if (!isCurrentRun(runId, token)) return;
+    state.lastEventId = lastEventIdFromStream(timeline);
     $("timeline").textContent = timeline;
     const artifacts = await request(`/runs/${encodeURIComponent(runId)}/artifacts${query}`);
     if (!isCurrentRun(runId, token)) return;
@@ -257,7 +394,7 @@ async function selectRun(runId) {
 
 function renderDiagnostics(diagnostics, run, events, artifacts, diff) {
   const failures = (run.tasks || []).filter((task) => task.error || ["failed", "blocked"].includes(task.status));
-  const failed = run.status === "failed" || failures.length > 0 || (diagnostics.failure_class && diagnostics.failure_class !== "none");
+  const failed = run.status === "failed" && (failures.length > 0 || (diagnostics.failure_class && diagnostics.failure_class !== "none"));
   $("diagnostics").hidden = !failed;
   if (!failed) return;
   $("diagnostic-summary").textContent = diagnostics.summary || failures.map((task) => `${task.id}: ${task.error || task.status}`).join("\n") || `Run ${run.status || "failed"}.`;
@@ -347,23 +484,24 @@ async function reusePlan(planId = $("plan-history").value) {
   state.planId = record.id;
   saveSelectedPlan(state.projectId, record.id);
   $("plan-markdown").value = record.markdown;
-  $("plan-status").textContent = "Loading saved plan";
+  setStatus("plan-status", "Loading saved plan", "loading");
   try {
     const plan = await request(`/plans/${encodeURIComponent(record.id)}`);
-    $("plan-preview").textContent = JSON.stringify(plan, null, 2);
+    renderPlanPreview(plan);
     $("start-run").disabled = !plan.compiled;
-    $("plan-status").textContent = plan.compiled ? "Compiled plan ready" : "Saved draft";
+    setStatus("plan-status", plan.compiled ? "Compiled plan ready" : "Saved draft", plan.compiled ? "compiled" : "draft");
   } catch (error) {
     $("start-run").disabled = true;
+    setStatus("plan-status", "Unable to load plan", "error");
     showError(error);
   }
 }
 
 async function compilePlan(planId) {
   const compiled = await request(`/plans/${encodeURIComponent(planId)}/compile`, { method: "POST" });
-  $("plan-preview").textContent = JSON.stringify(compiled, null, 2);
+  renderPlanPreview(compiled);
   $("start-run").disabled = compiled.status !== "compiled" || Boolean(compiled.error);
-  $("plan-status").textContent = compiled.status === "compiled" ? "Compiled plan ready" : "Compilation failed";
+  setStatus("plan-status", compiled.status === "compiled" ? "Compiled plan ready" : "Compilation failed", compiled.status === "compiled" ? "compiled" : "error");
   const saved = await request(`/plans/${encodeURIComponent(planId)}`);
   rememberPlan(saved);
 }
@@ -372,11 +510,16 @@ function connectEvents(runId, token = state.selectedRunToken) {
   if (!isCurrentRun(runId, token)) return;
   if (state.eventSource) state.eventSource.close();
   const projectId = selectedProject();
-  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+  const query = eventsQuery(projectId, state.lastEventId);
   const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events${query}`);
   state.eventSource = source;
   const applyEvent = (event) => {
     if (!isCurrentRun(runId, token) || state.eventSource !== source) return;
+    const eventId = Number(event.lastEventId);
+    if (Number.isSafeInteger(eventId) && eventId > 0) {
+      if (eventId <= state.lastEventId) return;
+      state.lastEventId = eventId;
+    }
     let payload;
     try { payload = JSON.parse(event.data); } catch (_) { /* Keep plain-text event streams usable. */ }
     if (payload?.run_id && payload.run_id !== runId) return;
@@ -457,10 +600,47 @@ $("start-run").onclick = async () => {
   }
   catch (error) { showError(error); }
 };
-for (const [id, action] of [["resume-run", "resume"], ["pause-run", "pause"], ["cancel-run", "cancel"]]) {
+async function resumeSelectedRun() {
+  const runId = state.runId;
+  const token = state.selectedRunToken;
+  const projectId = selectedProject();
+  const waitingForApproval = $("run-status").textContent === "waiting_for_approval";
+  if (!runId || !isCurrentRun(runId, token)) return;
+  try {
+    if (waitingForApproval) {
+      if (!state.currentTaskId) throw new Error("This run is waiting for approval but has no current task.");
+      await request(`/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(state.currentTaskId)}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ project_id: projectId }),
+      });
+    }
+    if (!isCurrentRun(runId, token)) return;
+    await request(`/runs/${encodeURIComponent(runId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId }),
+    });
+    if (isCurrentRun(runId, token)) await selectRun(runId);
+  } catch (error) {
+    if (isCurrentRun(runId, token)) showError(error);
+  }
+}
+
+$("resume-run").onclick = resumeSelectedRun;
+for (const [id, action] of [["pause-run", "pause"], ["cancel-run", "cancel"]]) {
   $(id).onclick = () => state.runId && request(`/runs/${encodeURIComponent(state.runId)}/${action}`, { method: "POST" }).then(() => selectRun(state.runId)).catch(showError);
 }
 $("archive-run").onclick = () => manageRun("archive", "Archive");
 $("cleanup-run").onclick = () => manageRun("cleanup", "Clean up");
-$("health").textContent = "Ready";
-refreshProjects().then(refreshRuns).catch(showError);
+
+async function refreshHealth() {
+  try {
+    const response = await request("/health");
+    const healthy = response?.status === "ok";
+    setStatus("health", healthy ? "Control plane online" : "Control plane degraded", healthy ? "ok" : "error");
+  } catch (error) {
+    setStatus("health", "Control plane offline", "error");
+    showError(error);
+  }
+}
+
+Promise.all([refreshHealth(), refreshProjects()]).then(() => refreshRuns()).catch(showError);

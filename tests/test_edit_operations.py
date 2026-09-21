@@ -116,6 +116,43 @@ def test_legitimate_new_file_creation(tmp_path):
     assert (tmp_path / "new.py").read_text() == "value = 1\n"
 
 
+def test_legitimate_empty_new_file_creation(tmp_path):
+    init_repo(tmp_path)
+    (tmp_path / ".keep").write_text("\n")
+    commit_all(tmp_path)
+
+    changed = apply_edit_operations(
+        tmp_path,
+        response({
+            "kind": "create_file",
+            "path": "app/__init__.py",
+            "content": "",
+        }),
+    )
+
+    assert changed == ["app/__init__.py"]
+    assert (tmp_path / "app" / "__init__.py").read_text() == ""
+
+
+def test_new_file_trailing_whitespace_is_rejected_without_write(tmp_path):
+    init_repo(tmp_path)
+    (tmp_path / ".keep").write_text("\n")
+    commit_all(tmp_path)
+
+    with pytest.raises(EditOperationError, match="trailing whitespace") as error:
+        apply_edit_operations(
+            tmp_path,
+            response({
+                "kind": "create_file",
+                "path": "tests/test_whitespace.py",
+                "content": "def test_smoke():\n    \n",
+            }),
+        )
+
+    assert error.value.failure_class == "whitespace_error"
+    assert not (tmp_path / "tests" / "test_whitespace.py").exists()
+
+
 def test_create_existing_path_is_rejected_as_path_conflict(tmp_path):
     init_repo(tmp_path)
     (tmp_path / "app.py").write_text("value = 1\n")

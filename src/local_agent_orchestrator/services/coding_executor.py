@@ -35,6 +35,7 @@ SYSTEM_PROMPT = (
     "- No explanation outside JSON.\n"
     "- replace_exact requires non-empty old_text and new_text; copy old_text exactly from evidence.\n"
     "- create_file requires complete content for the new file.\n"
+    "- create_file content must not contain trailing spaces or tabs; blank lines must be empty.\n"
     "- delete_file requires only kind and path.\n"
     "- Modify only files required by the task.\n"
     "- Preserve unrelated existing code.\n"

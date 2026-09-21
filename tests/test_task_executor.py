@@ -5,6 +5,7 @@ from local_agent_orchestrator.services.dependency_bootstrap import (
     BootstrapResult,
     VerificationBootstrapError,
 )
+from local_agent_orchestrator.services.diff_patch import DiffPatchError
 from local_agent_orchestrator.services.edit_operations import EditOperationError
 
 from local_agent_orchestrator.services.task_executor import (
@@ -599,6 +600,49 @@ def test_operation_failure_class_is_recorded_and_repeated_in_retry_prompt(tmp_pa
     assert rejected[0]["failure_class"] == "no_match"
     assert len(rejected[0]["detail"]) <= 2_000
     assert "OPERATION_FAILURE_CLASS: no_match" in prompts[1]
+
+
+def test_whitespace_failure_gets_precise_class_and_retry_guidance(tmp_path):
+    passed = CommandResult(True, 0, "ok", "")
+    prompts = []
+
+    def fake_coder(task, workspace_root, **kwargs):
+        prompts.append(task)
+        if len(prompts) == 1:
+            raise DiffPatchError("error: trailing whitespace.")
+        return ["app.py"]
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=passed,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.diagnose_failure",
+            return_value="retry",
+        ),
+    ):
+        result = execute_task_with_retries(
+            "Implement feature",
+            tmp_path,
+            ["pytest", "-q"],
+            retry_limit=1,
+        )
+
+    assert result.passed is True
+    assert result.operation_failures[0]["failure_class"] == "whitespace_error"
+    assert "WHITESPACE GUIDANCE" in prompts[1]
 
 
 def test_preexisting_failure_allows_checkpointable_task_result(tmp_path):

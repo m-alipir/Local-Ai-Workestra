@@ -152,6 +152,15 @@ def _validate_operations(
                     f"New file path already exists: {path}",
                     failure_class="path_conflict",
                 )
+            assert operation.content is not None
+            if any(
+                line.endswith((" ", "\t"))
+                for line in operation.content.splitlines()
+            ):
+                raise EditOperationError(
+                    f"New file content contains trailing whitespace: {path}",
+                    failure_class="whitespace_error",
+                )
             candidate_contents[path] = operation.content
             continue
 

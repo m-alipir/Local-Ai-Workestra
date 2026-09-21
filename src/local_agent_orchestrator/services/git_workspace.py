@@ -189,6 +189,7 @@ class GitWorkspace:
         ):
             configured = self._run(
                 "config",
+                "--local",
                 "--get",
                 key,
                 check=False,

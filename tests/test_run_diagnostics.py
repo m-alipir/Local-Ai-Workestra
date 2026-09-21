@@ -162,3 +162,176 @@ def test_collect_run_diagnostics_reports_passed_run_without_failure(tmp_path):
     assert diagnostics["failure_class"] == "none"
     assert diagnostics["failing_task"] is None
     assert diagnostics["summary"] == "Run run-456 passed."
+
+
+def test_collect_run_diagnostics_keeps_active_retry_nonterminal(tmp_path):
+    run_dir = tmp_path / "run-active"
+    run_dir.mkdir()
+    _write_json(
+        run_dir / "state.json",
+        {
+            "run_id": "run-active",
+            "status": "running",
+            "current_task": "task-001",
+            "tasks": [
+                {
+                    "id": "task-001",
+                    "description": "retry",
+                    "status": "running",
+                }
+            ],
+        },
+    )
+    (run_dir / "trajectory.jsonl").write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in [
+                {
+                    "run_id": "run-active",
+                    "task_id": "task-001",
+                    "event": "coding_output_rejected",
+                    "model": "qwen_coder",
+                    "attempt": 1,
+                    "failure_class": "no_match",
+                    "detail": "retryable operation rejection",
+                },
+                {
+                    "run_id": "run-active",
+                    "task_id": "task-001",
+                    "event": "model_attempt_started",
+                    "model": "qwen_coder",
+                    "attempt": 2,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = collect_run_diagnostics(run_dir)
+
+    assert diagnostics["status"] == "running"
+    assert diagnostics["failure_class"] == "in_progress"
+    assert diagnostics["summary"] == "Run run-active is still in progress."
+    assert [error["event"] for error in diagnostics["model_errors"]] == [
+        "coding_output_rejected"
+    ]
+
+
+def test_collect_run_diagnostics_does_not_treat_model_start_as_error(tmp_path):
+    run_dir = tmp_path / "run-start"
+    run_dir.mkdir()
+    _write_json(
+        run_dir / "state.json",
+        {
+            "run_id": "run-start",
+            "status": "failed",
+            "tasks": [
+                {
+                    "id": "task-001",
+                    "description": "failed",
+                    "status": "failed",
+                }
+            ],
+        },
+    )
+    (run_dir / "trajectory.jsonl").write_text(
+        json.dumps(
+            {
+                "run_id": "run-start",
+                "task_id": "task-001",
+                "event": "model_attempt_started",
+                "model": "qwen_coder",
+                "attempt": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = collect_run_diagnostics(run_dir)
+
+    assert diagnostics["model_errors"] == []
+    assert diagnostics["failure_class"] == "task_failure"
+
+
+def test_collect_run_diagnostics_uses_failed_task_not_historical_metrics(tmp_path):
+    run_dir = tmp_path / "run-current-task"
+    (run_dir / "metrics").mkdir(parents=True)
+    _write_json(
+        run_dir / "state.json",
+        {
+            "run_id": "run-current-task",
+            "status": "failed",
+            "tasks": [
+                {
+                    "id": "task-001",
+                    "description": "earlier edit",
+                    "status": "passed",
+                },
+                {
+                    "id": "task-002",
+                    "description": "add tests",
+                    "status": "failed",
+                    "error": "no tests ran in 0.00s",
+                    "verification_status": "failed",
+                },
+            ],
+        },
+    )
+    _write_json(
+        run_dir / "metrics" / "task-001.json",
+        {
+            "task_id": "task-001",
+            "operation_failures": [
+                {"failure_class": "no_match", "detail": "old attempt"}
+            ],
+            "verification_classification": "preexisting_failures_only",
+        },
+    )
+    (run_dir / "trajectory.jsonl").write_text(
+        json.dumps(
+            {
+                "run_id": "run-current-task",
+                "task_id": "task-002",
+                "event": "task_completed",
+                "passed": False,
+                "detail": "no tests ran in 0.00s",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = collect_run_diagnostics(run_dir)
+
+    assert diagnostics["failure_class"] == "verification_failure"
+    assert diagnostics["verifier"]["classification"] is None
+    assert "preexisting_failures_only" not in diagnostics["summary"]
+    assert "no tests ran" in diagnostics["summary"]
+
+
+def test_collect_run_diagnostics_reports_latest_checkpoint_commit(tmp_path):
+    run_dir = tmp_path / "run-commits"
+    run_dir.mkdir()
+    _write_json(
+        run_dir / "state.json",
+        {"run_id": "run-commits", "status": "passed", "tasks": []},
+    )
+    (run_dir / "trajectory.jsonl").write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "event": "checkpoint_created",
+                    "detail": f"commit={commit}; changed_files=app.py",
+                }
+            )
+            for commit in ("1111111", "2222222")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = collect_run_diagnostics(run_dir)
+
+    assert diagnostics["checkpoint"]["commit"] == "2222222"

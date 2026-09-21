@@ -1299,6 +1299,22 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
 - Focused project/application/UI tests: **16 passed**.
 - Full isolated suite: **280 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
 - `node --check web/app.js`, `compileall -q src tests benchmarks`, and `git diff --check` pass.
+- Final artifact comparison found checkpoint diagnostics retained the first commit instead of the
+  latest task checkpoint. It now reports the latest checkpoint commit. Focused diagnostics/UI tests:
+  **11 passed**.
+- Full isolated suite after checkpoint reporting fix: **298 passed**.
+- Final `node --check web/app.js`, `compileall -q src tests benchmarks`, and `git diff --check` all
+  pass.
+- Run `933c5a768f66` completed with authoritative status **failed** at `task-006`: tasks 1–5 passed
+  and checkpointed on the isolated branch, while the test task correctly failed on the target's
+  known empty suite (`no tests ran in 0.00s`); tasks 7–11 were skipped. No llama-server or pytest
+  process remains and the target branch is clean.
+- Replaying its final artifacts through the fixed diagnostics yields
+  `verification_failure` at task-006, includes the concrete no-tests verifier line, and reports the
+  latest checkpoint `514ea72abf880a2ba0b5051d175e7a0ded3978d0`. The earlier in-progress
+  `model_or_backend_error` was transient diagnostic misclassification, not the terminal cause.
+- Final disk/list/detail state comparison is consistent: all report `failed`; the trajectory records
+  the retry history and task-006 verification failure, and no target/model process remains.
 
 # 2026-09-21 — Workestra Control true edit mode
 
@@ -1403,3 +1419,174 @@ uv run python -m local_agent_orchestrator.plan_cli   --workspace ~/AI-Assistant 
   Control API, run-scope, UI, and llama adapter set: **55 passed**. Full isolated suite: **286
   passed** under `GIT_CONFIG_GLOBAL=/dev/null`. `compileall -q src tests benchmarks`,
   `node --check web/app.js`, and `git diff --check` all pass. No commit was created.
+
+## 2026-09-21 — Workestra Control interface sprint
+
+- Reworked the dependency-free Control UI into a responsive project/plan workspace and run-first
+  monitoring surface with a dark-cherry visual system, structured plan/task rendering, stronger
+  status hierarchy, and accessible native controls. Existing DOM/API/state contracts and the
+  execution engine remain authoritative and unchanged.
+- Corrected UI lifecycle gaps found during review: hidden management forms remain hidden, metadata
+  contrast meets the dark-surface accessibility target, health visuals follow health state,
+  waiting runs approve the current task before resume, and SSE reconnects preserve the last event
+  id instead of replaying duplicate timeline entries.
+- Real headless-Chromium E2E passed at desktop and 390px: live health/project APIs loaded, project
+  selection and run detail worked, unsafe actions stayed disabled, the edit form stayed hidden,
+  the selected run's event appeared exactly once across reconnects, no horizontal overflow was
+  present, and browser console/network failures were empty.
+- Final validation: focused Control/API/UI suite **42 passed**; full isolated suite **287 passed**.
+  `node --check web/app.js`, `compileall -q src tests benchmarks`, and `git diff --check` pass. No
+  execution-engine, AI-Assistant, production/VPS, dependency, or commit change was made.
+
+## 2026-09-21 — URL Shortener baseline investigation (`79eef7f0ab04`)
+
+- Reproduced the stored verifier exactly: `python -m pytest -q` from
+  `/home/ali/Projeler/url-shortener`, using the target `.venv` and isolated verification
+  environment. It exits **5** with stdout `no tests ran in 0.00s` and empty stderr. Equivalent
+  `uv run pytest -q` produces the same result.
+- The target is a clean agent branch with locked `pyproject.toml`/`uv.lock`, pytest 9.1.1 in
+  `.venv`, and no tracked test files. This is not a dependency, import, environment, or workspace
+  mutation failure.
+- The parser currently treats this known pytest no-test result as uninterpretable because it only
+  extracts `FAILED`/`ERROR` identities. The safe fix is to represent the exact return-code-5,
+  canonical no-tests output as a structured pytest identity, while continuing to fail closed for
+  other unknown non-zero results. Focused regression tests are next.
+- Added the strict `pytest:no_tests_collected` identity for return code 5 only when the canonical
+  `no tests ran in <duration>s` summary is present. Baseline/post comparison can now preserve this
+  known state as pre-existing; arbitrary code 5, empty output, and noncanonical messages remain
+  uninterpretable. Focused triage tests: **16 passed**.
+- Reproduced the real task executor against the same clean URL Shortener branch. Bootstrap reused
+  the target `.venv`; baseline recorded `pytest:no_tests_collected` and emitted
+  `verification_baseline_finished`; task-001 then emitted `model_attempt_started` (coding stage)
+  before the probe stopped, with no model request or target mutation.
+- Focused verification/executor/runtime regressions: **49 passed**.
+- Full isolated orchestrator suite: **293 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
+- `compileall -q src tests benchmarks` and `git diff --check` pass.
+- Final repeat of compileall/diff checks passes; the target agent branch remains clean and no model
+  process or verifier process remains.
+
+## 2026-09-21 — Live run diagnostics audit (`933c5a768f66`)
+
+- Live artifact and API reads showed the authoritative run remained `running` on `task-001` while
+  Qwen retried after a `no_match` operation rejection. The displayed `model_or_backend_error` was
+  not a terminal run failure.
+- Diagnostics incorrectly treated every `model_*` event, including `model_attempt_started`, as a
+  model error, and selected the model-error class before checking the persisted run status. The UI
+  also rendered any non-`none` diagnostic class as a failed banner even while the selected run was
+  running.
+- Fixed diagnostics to classify pending/running/approval-waiting runs as `in_progress`, exclude
+  model-start events from errors, and report an in-progress summary. The UI now renders failure
+  diagnostics only for an authoritative failed run and clears stale diagnostics on active status
+  refresh. Focused diagnostics/UI tests: **9 passed**.
+- Full isolated orchestrator suite after the fix: **296 passed** under `GIT_CONFIG_GLOBAL=/dev/null`.
+- Final run evidence showed a second diagnostics accuracy issue: historical operation failures and
+  the last available metric could override the actual failing task's verification result. Diagnostics
+  now scope metrics/errors to the failing task, prioritize its failed verification status, and retain
+  the concrete verifier line in the summary. Focused diagnostics/UI tests: **10 passed**.
+- Full isolated suite after task-scoped diagnostics: **297 passed**.
+- `node --check web/app.js`, `compileall -q src tests benchmarks`, and `git diff --check` pass.
+
+## 2026-09-21 — URL Shortener Plan v2 ordering fix (in progress)
+
+- Historical run `933c5a768f66` confirmed the compiler emitted eleven tasks with empty
+  `depends_on` lists. Tasks 6 and 7 were classified as `test` even though their descriptions
+  asked the agent to create automated test files; the runtime `test` kind only runs the trusted
+  verifier, so task 6 reached pytest before any tests existed and returned code 5.
+- Tightened Plan Intake semantics: `code` covers production and test-file edits, `test` is
+  verifier execution only, and each verifier task must carry an explicit dependency on a code
+  task when implementation tasks exist. Validation rejects an explicit test task whose description
+  clearly asks to create tests rather than silently reclassifying it. Existing topological
+  validation remains the execution order authority.
+- Added focused regression coverage for explicit verifier prerequisites and misclassified test
+  creation. Plan/compiler/runtime focused tests: **38 passed**.
+- The first live recompile failed closed on a second compiler defect: Bonsai emitted a task
+  description inside `depends_on` (`task-002 depends on unknown task ...`) instead of a task ID.
+  The compiler prompt now makes IDs mandatory in practice and forbids description/ordinal
+  dependencies; unknown references report the known IDs in the controlled validation error.
+  Focused tests after this guard: **38 passed**.
+- Recompiled the exact stored URL Shortener Markdown successfully with Bonsai. The resulting
+  graph has twelve tasks in deterministic topological order: implementation code tasks
+  `task-1-1` through `task-2-3`, test-file code tasks `task-3-1` and `task-3-2`, verifier task
+  `task-3-3`, then reviews/docs. `task-3-3` explicitly depends on `task-3-2`, whose dependency
+  chain covers the implementation/test tasks, so test execution cannot precede test creation.
+- Disposable E2E attempt `00a524cdd4c6` was stopped during task 1 because it was incorrectly
+  based on the prior partial agent branch (`agent/79eef7f0ab04`), where tasks 1–5 already existed;
+  the model's no-op was rejected as designed. No target files or model process remained. Its
+  interrupted artifact is preserved; a clean-master worktree is required for a meaningful full
+  ordering E2E.
+- Clean-master E2E `a4206990a71c` reached task 1 but exposed a legitimate empty-file creation
+  defect in the existing diff grounding layer: Git emits `new file mode` without a hunk for an
+  empty file, so `app/__init__.py` was rejected as ungrounded. Added detection for that Git marker
+  only; strict path/traversal and `git apply --check --recount --whitespace=error` validation are
+  unchanged. Focused edit/diff/plan/runtime tests: **64 passed**. The failed E2E artifact is
+  preserved and its disposable worktree is isolated.
+- Clean-master full-plan retry `ca5dde9dd636` passed bootstrap and reached coding, but Qwen and
+  Devstral repeatedly proposed speculative README replacements/new-file conflicts for the broad
+  foundation task; strict no-match/path-conflict validation failed task 1 before any test task.
+  No target changes survived. This is recorded as a model-generation limitation; the ordering
+  proof will use the compiled graph's test segment on the existing implementation branch.
+- Compiled test-segment E2E `5c0c0ba9a7af` confirmed dependency ordering at runtime: the first
+  code task created `tests/test_main.py` before any verifier task was eligible, then fixed an
+  existing import issue on retry and checkpointed. The second code task was attempted only after
+  that checkpoint but failed closed on model-generated trailing whitespace; dependent verifier
+  task 3 was blocked and no unsafe patch was applied. This demonstrates the graph order while
+  preserving strict whitespace validation; a smaller deterministic smoke graph is used next to
+  exercise a completed test execution task.
+- Two-task smoke `02f8fe2b45b1` again created `tests/test_ordering.py` before any dependent test
+  task could run, but the model-authored tests imported unsupported APIs and retries were safely
+  rolled back/rejected. The run was stopped after the final controlled `ungrounded_path` retry;
+  no model process remained and the target branch stayed clean. The remaining limitation is
+  coder task quality on underspecified/new test creation, not execution ordering.
+- Final focused plan/edit/diff/runtime tests: **66 passed**. Full isolated orchestrator suite:
+  **302 passed**.
+- Removed the compiler's overly broad implicit “all code tasks” dependency inference. Plan
+  validation now requires each verifier-only task to explicitly depend on at least one code task
+  when implementation tasks exist; ambiguous graphs fail closed with a useful error. Focused
+  tests after this refinement: **65 passed**.
+- Recompiled the exact URL Shortener Markdown again after the fail-closed dependency refinement:
+  Bonsai returned a valid graph and the same topological order. `task-3-1` and `task-3-2` are
+  `code`, and `task-3-3` is verifier-only with the explicit dependency `['task-3-2']`; the
+  implementation chain makes all earlier prerequisites transitively complete before pytest.
+- Final post-refinement validation: **303 tests passed**; `compileall -q src tests benchmarks`,
+  `node --check web/app.js`, and `git diff --check` all passed.
+- Final validation passed: `compileall -q src tests benchmarks`, `node --check web/app.js`, and
+  `git diff --check`. The orchestrator checkout remains uncommitted on `main`; the URL Shortener
+  target remains isolated on its agent branch and was not merged.
+
+## 2026-09-21 — URL Shortener create-file whitespace hardening (in progress)
+
+- Run `5c0c0ba9a7af` failed because Qwen and Devstral generated new test files with spaces on
+  otherwise blank lines. Git's mandatory `apply --check --recount --whitespace=error` rejected
+  those patches before target writes; existing-file exact replacements were unaffected.
+- Automatic whitespace stripping was rejected as unsafe for generic file formats. New-file
+  validation now fails early with `whitespace_error` (without writing), while the strict Git
+  validator remains unchanged. Coder/context prompts explicitly require no trailing spaces/tabs
+  and empty blank lines, and bounded retry prompts include focused whitespace guidance.
+- Focused edit/coder/task tests: **31 passed**.
+- Rerun `7b46b3b6bb15` classified the whitespace failure precisely: Qwen attempt 1 was rejected
+  as `whitespace_error`, then attempt 2 emitted whitespace-clean content. The task still failed
+  later because the model-authored test imported a nonexistent `Database` API; attempt 3 removed
+  the test file while changing implementation code, so the dependent pytest task ran only after
+  both code tasks and correctly failed with `no tests ran`. Strict rollback/checkpointing remained
+  intact; this is now a separate model task-quality blocker from whitespace formatting.
+
+## 2026-09-21 — URL Shortener create-file whitespace hardening (verified)
+
+- Disposable seeded URL Shortener run `17593e396033` passed. Qwen attempt 1 for the second code
+  task was rejected before any write with `whitespace_error`; the bounded retry produced clean
+  new-file content. Both code tasks checkpointed, the trusted pytest verifier ran and passed
+  (`3 passed`), and finalization completed. The run's commits were `8843d8d...` and
+  `887e225...` on the isolated disposable branch.
+- A final disposable review flow `ab18190fe51f` passed with one code task, one trusted pytest
+  task (`1 passed`), a mandatory Git diff check plus GPT-OSS review (`Model review found no
+  findings`), checkpoint creation (`de1d422...`), and finalization.
+- Focused edit/coder/task/Git tests: **38 passed**. Full orchestrator suite: **305 passed**.
+- `compileall -q src tests benchmarks`, `node --check web/app.js`, and `git diff --check` pass.
+- The full-suite check exposed an environment-sensitive Git identity test: checkpoint fallback
+  looked up global `user.name`/`user.email`, so a caller's global identity bypassed the intended
+  command-scoped fallback. Git identity lookup now uses repository-local config only; the fallback
+  still never mutates config, and the regression test checks local config. This is a deterministic
+  isolation fix, not a change to patch or verification safety.
+- Remaining blocker: model-generated test content can still be semantically wrong or remove
+  required tests after a whitespace-clean retry; strict exact-match, rollback, dependency order,
+  and verifier behavior remain fail-closed.

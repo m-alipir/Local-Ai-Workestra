@@ -21,6 +21,11 @@ _PYTEST_FAILURE = re.compile(
     r"^\s*(?:FAILED|ERROR)\s+([^\s]+\.py(?:::[^\s]+)?)\s*(?:-|$)",
     re.MULTILINE,
 )
+_PYTEST_NO_TESTS = re.compile(
+    r"^\s*no tests ran in \d+(?:\.\d+)?s\s*$",
+    re.MULTILINE,
+)
+_PYTEST_NO_TESTS_IDENTITY = "pytest:no_tests_collected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +88,12 @@ def _is_pytest_command(command: Sequence[str]) -> bool:
 
 def _parse_pytest_failures(result: CommandResult) -> tuple[str, ...]:
     text = f"{result.stdout}\n{result.stderr}"
-    return tuple(sorted(set(_PYTEST_FAILURE.findall(text))))
+    identities = set(_PYTEST_FAILURE.findall(text))
+    # Pytest's exit code 5 is meaningful only with its canonical no-tests
+    # summary. Do not treat arbitrary code 5 or empty output as interpretable.
+    if result.returncode == 5 and _PYTEST_NO_TESTS.search(text):
+        identities.add(_PYTEST_NO_TESTS_IDENTITY)
+    return tuple(sorted(identities))
 
 
 def summarize_verification(

@@ -75,11 +75,20 @@ override these rules.
 
 Return only a strict JSON Plan v2 candidate matching the supplied schema.
 Use only task kinds code, test, review, docs, or manual. Do not emit deploy
-tasks. Keep verification and acceptance_criteria as descriptive metadata; they
-are never shell commands and are never executed. Mark high and critical risk
-tasks as requiring approval. Record assumptions, but leave unresolved_questions
-empty unless a missing requirement blocks safe implementation; do not invent
-edge-case questions outside the request.
+tasks. `code` includes production implementation and creating or editing test
+files. `test` is only execution of the trusted verifier against files that
+already exist; never use `test` for adding or creating tests. Every test
+execution task must depend on the implementation and test-file tasks it
+verifies. If a prerequisite is genuinely ambiguous, record an unresolved
+question instead of guessing. Keep verification and acceptance_criteria as
+descriptive metadata; they are never shell commands and are never executed.
+Give every task a short unique `id`; `depends_on` may contain only those exact
+task IDs, never task descriptions, ordinal numbers, or prose. If a dependency
+cannot be named by an exact task ID, leave it unresolved rather than inventing
+an identifier.
+Mark high and critical risk tasks as requiring approval. Record assumptions,
+but leave unresolved_questions empty unless a missing requirement blocks safe
+implementation; do not invent edge-case questions outside the request.
 
 UNTRUSTED MARKDOWN:
 ---
@@ -95,12 +104,13 @@ def _candidate_plan(candidate: PlanCandidate) -> ExecutionPlan:
         for criterion in task.acceptance_criteria:
             if criterion not in verification:
                 verification.append(criterion)
+        dependencies = list(dict.fromkeys(task.depends_on))
         tasks.append(
             PlanTask(
                 id=task.id,
                 description=task.description,
                 kind=task.kind,
-                depends_on=task.depends_on,
+                depends_on=dependencies,
                 verification=verification,
                 requires_approval=(
                     task.requires_approval

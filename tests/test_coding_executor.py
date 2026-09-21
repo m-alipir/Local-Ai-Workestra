@@ -100,4 +100,5 @@ def test_coder_prompt_spells_out_kind_specific_operation_fields(tmp_path):
     prompt = fake_agent.run.call_args.args[0]
     assert "replace_exact requires non-empty old_text and new_text" in prompt
     assert "create_file requires complete content" in prompt
+    assert "create_file content must not contain trailing spaces or tabs" in prompt
     assert "delete_file requires only kind and path" in prompt
