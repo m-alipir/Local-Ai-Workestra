@@ -22,6 +22,10 @@ def execute_tracked_task(
     workspace_root: str | Path,
     test_command: list[str],
     retry_limit: int = 2,
+    primary_scope: list[str] | None = None,
+    discouraged_scope: list[str] | None = None,
+    forbidden_scope: list[str] | None = None,
+    file_boundaries: list[str] | None = None,
 ) -> TaskExecutionResult:
     run_dir = manager.get_run_dir(state.run_id)
 
@@ -52,6 +56,10 @@ def execute_tracked_task(
             workspace_root=workspace_root,
             test_command=test_command,
             retry_limit=retry_limit,
+            primary_scope=primary_scope,
+            discouraged_scope=discouraged_scope,
+            forbidden_scope=forbidden_scope,
+            file_boundaries=file_boundaries,
             event_callback=emit,
         )
     except Exception as exc:

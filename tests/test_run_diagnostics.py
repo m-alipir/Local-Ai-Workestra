@@ -138,6 +138,105 @@ def test_collect_run_diagnostics_preserves_unlabelled_verifier_detail(tmp_path):
     assert "FAILED test_demo.py::test_one" in diagnostics["verifier"]["stderr"]
 
 
+def test_coding_schema_failure_is_not_reported_as_verifier_failure(tmp_path):
+    run_dir = tmp_path / "run-schema-failure"
+    (run_dir / "metrics").mkdir(parents=True)
+    _write_json(
+        run_dir / "state.json",
+        {
+            "run_id": "run-schema-failure",
+            "status": "failed",
+            "tasks": [
+                {"id": "task-001", "description": "build app", "status": "passed"},
+                {
+                    "id": "task-002",
+                    "description": "add validation",
+                    "status": "failed",
+                    "error": "STDERR:\nCoding output could not be safely applied: duplicate paths",
+                    "verification_status": "not_requested",
+                },
+            ],
+        },
+    )
+    _write_json(
+        run_dir / "metrics" / "task-001.json",
+        {
+            "task_id": "task-001",
+            "test_returncode": 0,
+            "verification_classification": "passed",
+        },
+    )
+    _write_json(
+        run_dir / "metrics" / "task-002.json",
+        {
+            "task_id": "task-002",
+            "test_returncode": 1,
+            "baseline_returncode": 0,
+            "baseline_passed": True,
+            "verification_classification": None,
+            "operation_failures": [
+                {
+                    "model": "qwen_coder",
+                    "attempt": 1,
+                    "failure_class": "invalid_schema",
+                    "detail": "operations must not contain duplicate paths",
+                }
+            ],
+        },
+    )
+    (run_dir / "trajectory.jsonl").write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in [
+                {
+                    "run_id": "run-schema-failure",
+                    "task_id": "task-001",
+                    "event": "tests_finished",
+                    "passed": True,
+                    "detail": "returncode=0\nSTDOUT:\n1 passed\nSTDERR:\n",
+                },
+                {
+                    "run_id": "run-schema-failure",
+                    "task_id": "task-002",
+                    "event": "coding_output_rejected",
+                    "model": "qwen_coder",
+                    "attempt": 1,
+                    "failure_class": "invalid_schema",
+                    "detail": "operations must not contain duplicate paths",
+                },
+                {
+                    "run_id": "run-schema-failure",
+                    "task_id": "task-002",
+                    "event": "task_completed",
+                    "passed": False,
+                    "detail": "STDERR:\\nCoding output could not be safely applied: duplicate paths",
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = collect_run_diagnostics(run_dir)
+
+    assert diagnostics["failure_class"] == "operation_failure"
+    assert diagnostics["verifier"] == {
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "classification": None,
+        "baseline_returncode": 0,
+        "baseline_passed": True,
+    }
+    assert diagnostics["model_errors"][0]["failure_class"] == "invalid_schema"
+    task_errors = [
+        error for error in diagnostics["model_errors"]
+        if error.get("task_id") == "task-002"
+    ]
+    assert len(task_errors) == 1
+    assert task_errors[0]["attempt"] == 1
+
+
 def test_collect_run_diagnostics_reports_passed_run_without_failure(tmp_path):
     run_dir = tmp_path / "run-456"
     run_dir.mkdir()

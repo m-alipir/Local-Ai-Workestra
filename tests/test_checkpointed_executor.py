@@ -250,6 +250,46 @@ def test_security_review_runs_for_sensitive_task(tmp_path):
     assert result.security_review.findings == []
 
 
+def test_security_reviewer_exception_fails_task_and_rolls_back(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    make_repo(repo)
+    manager = RunStateManager(tmp_path / "runs")
+    state = manager.create_run("Add API authentication")
+    task = manager.add_task(state, "Add API authentication")
+
+    def fake_execute(**kwargs):
+        manager.update_task(state, task.id, TaskStatus.RUNNING)
+        (repo / "app.py").write_text("x = 2\n")
+        manager.update_task(state, task.id, TaskStatus.PASSED)
+        return make_result(True)
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.checkpointed_executor.execute_tracked_task",
+            side_effect=fake_execute,
+        ),
+        patch(
+            "local_agent_orchestrator.services.checkpointed_executor.run_security_review",
+            side_effect=RuntimeError("reviewer unavailable"),
+        ),
+    ):
+        result = execute_checkpointed_task(
+            state=state,
+            manager=manager,
+            task_id=task.id,
+            task_description=task.description,
+            workspace_root=repo,
+            test_command=["pytest", "-q"],
+        )
+
+    assert result.execution.passed is False
+    assert result.commit is None
+    assert manager.load(state.run_id).tasks[0].status == TaskStatus.FAILED
+    assert (repo / "app.py").read_text() == "x = 1\n"
+    assert result.metrics_path.exists()
+
+
 def test_optimizer_runs_for_performance_task(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -292,3 +332,51 @@ def test_optimizer_runs_for_performance_task(tmp_path):
 
     assert optimizer.call_count == 1
     assert result.optimization_review == "Measure before and after."
+
+
+def test_optimizer_exception_fails_task_and_rolls_back(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    make_repo(repo)
+    manager = RunStateManager(tmp_path / "runs")
+    state = manager.create_run("Optimize database query latency")
+    task = manager.add_task(state, "Optimize database query latency")
+
+    def fake_execute(**kwargs):
+        manager.update_task(state, task.id, TaskStatus.RUNNING)
+        (repo / "app.py").write_text("x = 2\n")
+        manager.update_task(state, task.id, TaskStatus.PASSED)
+        return make_result(True)
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.checkpointed_executor.execute_tracked_task",
+            side_effect=fake_execute,
+        ),
+        patch(
+            "local_agent_orchestrator.services.checkpointed_executor.requires_security_review",
+            return_value=False,
+        ),
+        patch(
+            "local_agent_orchestrator.services.checkpointed_executor.requires_optimization_review",
+            return_value=True,
+        ),
+        patch(
+            "local_agent_orchestrator.services.checkpointed_executor.run_optimization_review",
+            side_effect=RuntimeError("optimizer unavailable"),
+        ),
+    ):
+        result = execute_checkpointed_task(
+            state=state,
+            manager=manager,
+            task_id=task.id,
+            task_description=task.description,
+            workspace_root=repo,
+            test_command=["pytest", "-q"],
+        )
+
+    assert result.execution.passed is False
+    assert result.commit is None
+    assert manager.load(state.run_id).tasks[0].status == TaskStatus.FAILED
+    assert (repo / "app.py").read_text() == "x = 1\n"
+    assert result.metrics_path.exists()

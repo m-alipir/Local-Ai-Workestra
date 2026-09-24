@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+from importlib.metadata import version as package_version
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, is_dataclass
 from http import HTTPStatus
@@ -12,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 
 MAX_BODY_BYTES = 1_048_576
+BUILD_VERSION = package_version("local-agent-orchestrator")
 WEB_ROOT = Path(__file__).resolve().parents[3] / "web"
 _FORBIDDEN_KEYS = {
     "cmd",
@@ -42,6 +44,8 @@ class ControlService(Protocol):
     def list_runs(self, **filters: Any) -> Any: ...
 
     def list_plans(self, project_id: str | None = None) -> Any: ...
+
+    def list_plan_history(self) -> Any: ...
 
     def get_run(self, run_id: str, project_id: str | None = None) -> Any: ...
 
@@ -142,17 +146,29 @@ class ControlAPI:
             if method == "GET" and (not path or path[:1] == ("web",)):
                 return self._static(path)
             if method == "GET" and path == ("api", "health"):
-                return self._json(HTTPStatus.OK, {"status": "ok"})
+                return self._json(HTTPStatus.OK, {"status": "ok", "version": BUILD_VERSION})
             if method == "GET" and path == ("api", "projects"):
                 return self._json(HTTPStatus.OK, self._call("list_projects"))
+            if method == "POST" and path == ("api", "projects", "bootstrap", "python"):
+                return self._json(HTTPStatus.CREATED, self._call("bootstrap_python_project_request", payload))
             if method == "GET" and len(path) == 3 and path[:2] == ("api", "projects"):
                 return self._json(HTTPStatus.OK, self._call("get_project", path[2]))
             if method == "GET" and len(path) == 4 and path[:2] == ("api", "projects") and path[3] == "plans":
                 return self._json(HTTPStatus.OK, self._call("list_plans", project_id=path[2]))
             if method == "GET" and path == ("api", "plans"):
                 return self._json(HTTPStatus.OK, self._call("list_plans", project_id=query.get("project_id")))
+            if method == "GET" and path == ("api", "plan-history"):
+                return self._json(HTTPStatus.OK, self._call("list_plan_history"))
             if method == "GET" and len(path) == 3 and path[:2] == ("api", "plans"):
                 return self._json(HTTPStatus.OK, self._call("get_plan", path[2]))
+            if method == "GET" and len(path) == 4 and path[:2] == ("api", "plans") and path[3] == "eligibility":
+                revision = query.get("compiled_revision")
+                if revision is None or not revision.isdecimal():
+                    raise ValueError("compiled_revision must be a positive integer.")
+                return self._json(
+                    HTTPStatus.OK,
+                    self._call("project_creation_eligibility", path[2], int(revision)),
+                )
             if method == "GET" and path == ("api", "runs"):
                 return self._json(HTTPStatus.OK, self._call("list_runs", **query))
             if method == "GET" and len(path) == 3 and path[:2] == ("api", "runs"):
@@ -199,6 +215,14 @@ class ControlAPI:
                 return self._json(HTTPStatus.CREATED, self._call("import_plan", payload))
             if method == "POST" and len(path) == 4 and path[:2] == ("api", "plans") and path[3] == "compile":
                 return self._json(HTTPStatus.OK, self._call("compile_plan", path[2], payload))
+            if method == "POST" and len(path) == 4 and path[:2] == ("api", "plans") and path[3] == "project":
+                revision = (payload or {}).get("compiled_revision")
+                if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+                    raise ValueError("compiled_revision must be a positive integer.")
+                return self._json(
+                    HTTPStatus.CREATED,
+                    self._call("create_project_from_plan", path[2], revision),
+                )
             if method == "POST" and path == ("api", "runs"):
                 return self._submit("start_run", payload)
             if method == "DELETE" and len(path) == 3 and path[:2] == ("api", "runs"):
@@ -289,6 +313,9 @@ class ControlAPI:
         method = request_method or getattr(self.service, name, None)
         if method is None:
             raise AttributeError(f"Application service does not implement {name}")
+        preflight = getattr(self.service, f"assert_{name}_allowed", None)
+        if preflight is not None:
+            preflight(payload)
         self._jobs.submit(method, payload)
         response = {"status": "accepted"}
         if payload.get("run_id") is not None:
@@ -306,7 +333,13 @@ class ControlAPI:
             method = next((getattr(self.service, name, None) for name in names[action]), None)
             if method is None:
                 raise AttributeError(f"Application service does not implement {action}_run")
-            self._jobs.submit(method, run_id)
+            project_id = (payload or {}).get("project_id")
+            if project_id is not None and not isinstance(project_id, str):
+                raise ValueError("project_id must be a string.")
+            preflight = getattr(self.service, f"assert_{action}_run_allowed", None)
+            if preflight is not None:
+                preflight(run_id, project_id=project_id)
+            self._jobs.submit(method, run_id, project_id=project_id)
             return self._json(HTTPStatus.ACCEPTED, {"status": "accepted", "run_id": run_id})
         if action == "approvals":
             raise ValueError("Approval endpoint requires approval id")

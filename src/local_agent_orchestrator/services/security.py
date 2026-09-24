@@ -135,7 +135,11 @@ def _git_diff(
     )
 
     if result.returncode != 0:
-        return ""
+        raise RuntimeError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "Could not collect the Git diff for security review."
+        )
 
     return result.stdout[:50000]
 

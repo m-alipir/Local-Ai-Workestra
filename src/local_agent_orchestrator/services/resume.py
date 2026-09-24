@@ -17,6 +17,7 @@ from local_agent_orchestrator.services.plan_runner import (
     PlanExecutionError,
     PlanRunResult,
     _approval_required,
+    finalize_plan_run,
     _mark_remaining_after_failure,
     _record_verification_metadata,
     _run_explicit_task,
@@ -55,6 +56,30 @@ def resume_execution_plan(
     settings = load_settings()
     manager = RunStateManager(runs_dir)
     state = manager.load(run_id)
+    if state.status not in {TaskStatus.PENDING, TaskStatus.RUNNING}:
+        raise PlanExecutionError(
+            "Run must be approved and pending, or be an interrupted running run, before it can be resumed."
+        )
+    lease = manager.acquire_execution_lease(run_id)
+    try:
+        return _resume_execution_plan(
+            run_id, workspace_root, test_command, runs_dir, analytics_dir,
+            settings, manager, state,
+        )
+    finally:
+        manager.release_execution_lease(lease)
+
+
+def _resume_execution_plan(
+    run_id: str,
+    workspace_root: str | Path,
+    test_command: list[str],
+    runs_dir: str | Path,
+    analytics_dir: str | Path,
+    settings,
+    manager: RunStateManager,
+    state: RunState,
+) -> PlanRunResult:
 
     if not state.agent_branch:
         raise PlanExecutionError("Run does not have a recorded agent branch.")
@@ -169,6 +194,9 @@ def resume_execution_plan(
                 workspace_root=workspace_root,
                 test_command=test_command,
                 retry_limit=settings.orchestrator.task_retry_limit,
+                primary_scope=plan_task.primary_scope,
+                discouraged_scope=plan_task.discouraged_scope,
+                forbidden_scope=plan_task.forbidden_scope,
             )
             if result.commit:
                 commits.append(result.commit)
@@ -214,12 +242,12 @@ def resume_execution_plan(
         completed_tasks += 1
 
     passed = passed and completed_tasks == len(plan.tasks)
-    manager.finish_run(state, passed)
-
-    finalization = finalize_run(
-        run_id=run_id,
-        run_dir=manager.get_run_dir(run_id),
-        analytics_dir=analytics_dir,
+    passed, finalization = finalize_plan_run(
+        state,
+        manager,
+        passed,
+        analytics_dir,
+        finalizer=finalize_run,
     )
 
     return PlanRunResult(
@@ -229,6 +257,6 @@ def resume_execution_plan(
         total_tasks=len(plan.tasks),
         commits=commits,
         run_dir=manager.get_run_dir(run_id),
-        analytics_path=finalization.analytics_path,
-        retrospective_path=finalization.retrospective_path,
+        analytics_path=finalization.analytics_path if finalization else None,
+        retrospective_path=finalization.retrospective_path if finalization else None,
     )

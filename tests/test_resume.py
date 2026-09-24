@@ -61,6 +61,9 @@ def prepare_waiting_run(tmp_path):
                 kind="code",
                 requires_approval=True,
                 risk="high",
+                primary_scope=["app/"],
+                discouraged_scope=["shared/"],
+                forbidden_scope=["production/"],
             )
         ],
     )
@@ -160,6 +163,9 @@ def test_resume_executes_approved_code_task(tmp_path):
     assert result.completed_tasks == 1
     assert result.commits == ["abc123"]
     executor.assert_called_once()
+    assert executor.call_args.kwargs["primary_scope"] == ["app/"]
+    assert executor.call_args.kwargs["discouraged_scope"] == ["shared/"]
+    assert executor.call_args.kwargs["forbidden_scope"] == ["production/"]
 
 
 def test_resume_does_not_auto_execute_deploy(tmp_path):

@@ -1,6 +1,6 @@
 [project]
 name = "local-agent-orchestrator"
-version = "1.0.0"
+version = "1.0.1"
 description = "Safe local coding-agent orchestration with isolated verification and auditable checkpoints."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import version
 import subprocess
 import threading
 from unittest.mock import MagicMock, patch
@@ -124,7 +125,7 @@ def test_background_start_failure_does_not_break_control_api():
         api.close()
 
     assert health_status == 200
-    assert json.loads(health_body) == {"status": "ok"}
+    assert json.loads(health_body) == {"status": "ok", "version": version("local-agent-orchestrator")}
 
 
 def test_project_list_exposes_path_field_consumed_by_control_ui(tmp_path):

@@ -7,6 +7,7 @@ from local_agent_orchestrator.services.dependency_bootstrap import (
 )
 from local_agent_orchestrator.services.diff_patch import DiffPatchError
 from local_agent_orchestrator.services.edit_operations import EditOperationError
+from local_agent_orchestrator.models.scope import ScopeReview
 
 from local_agent_orchestrator.services.task_executor import (
     execute_task_with_retries,
@@ -129,7 +130,7 @@ def test_passes_first_attempt(tmp_path):
             "Implement feature",
             tmp_path,
             ["pytest", "-q"],
-            retry_limit=2,
+            retry_limit=1,
         )
 
     assert result.passed is True
@@ -263,6 +264,317 @@ def test_failed_attempt_edits_are_rolled_back_before_retry(tmp_path):
     assert result.accepted_attempt == 2
     assert not (tmp_path / "failed.py").exists()
     assert (tmp_path / "accepted.py").read_text() == "kept\n"
+
+
+def test_changed_files_must_stay_within_task_boundaries(tmp_path):
+    init_repo(tmp_path)
+    calls = []
+
+    def fake_coder(*args, **kwargs):
+        if not calls:
+            (tmp_path / "outside.py").write_text("rejected\n")
+            calls.append("outside")
+            return ["outside.py"]
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_api.py").write_text("def test_ok(): pass\n")
+        calls.append("inside")
+        return ["tests/test_api.py"]
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=CommandResult(True, 0, "ok", ""),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.diagnose_failure",
+            return_value="retry within the task boundary",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.review_unexpected_scope",
+            side_effect=[
+                ScopeReview(
+                    decision="RETRY_FRESH",
+                    reason="Unexpected file is not required.",
+                ),
+                ScopeReview(
+                    decision="PASS",
+                    reason="Test file is appropriate.",
+                    preserve_paths=["tests/test_api.py"],
+                ),
+            ],
+        ),
+    ):
+        result = execute_task_with_retries(
+            "Create API tests",
+            tmp_path,
+            ["pytest", "-q"],
+            retry_limit=1,
+            file_boundaries=["tests/"],
+        )
+
+    assert result.passed is True
+    assert result.attempts == 2
+    assert result.scope_reviews[0]["decision"] == "RETRY_FRESH"
+    assert not (tmp_path / "outside.py").exists()
+    assert (tmp_path / "tests" / "test_api.py").exists()
+
+
+def test_primary_change_passes_and_grey_change_can_be_kept_after_review(tmp_path):
+    init_repo(tmp_path)
+    (tmp_path / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "app"], cwd=tmp_path, check=True)
+
+    def fake_coder(*args, **kwargs):
+        (tmp_path / "app.py").write_text("value = 2\n")
+        (tmp_path / "shared.py").write_text("integration = True\n")
+        return ["app.py", "shared.py"]
+
+    review = ScopeReview(
+        decision="PASS",
+        reason="Shared integration file is required.",
+        preserve_paths=["app.py", "shared.py"],
+    )
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=CommandResult(True, 0, "ok", ""),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.review_unexpected_scope",
+            return_value=review,
+        ) as reviewer,
+    ):
+        result = execute_task_with_retries(
+            "Implement the service",
+            tmp_path,
+            ["pytest", "-q"],
+            primary_scope=["app.py"],
+            discouraged_scope=["shared.py"],
+        )
+
+    assert result.passed is True
+    assert result.changed_files == ["app.py", "shared.py"]
+    assert reviewer.call_count == 1
+    assert result.scope_reviews == [review.model_dump(mode="json")]
+
+
+def test_primary_scope_edit_passes_without_scope_review(tmp_path):
+    init_repo(tmp_path)
+
+    def fake_coder(*args, **kwargs):
+        (tmp_path / "app.py").write_text("value = 2\n")
+        return ["app.py"]
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=CommandResult(True, 0, "ok", ""),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.review_unexpected_scope",
+        ) as reviewer,
+    ):
+        result = execute_task_with_retries(
+            "Implement the service",
+            tmp_path,
+            ["pytest", "-q"],
+            primary_scope=["app.py"],
+        )
+
+    assert result.passed is True
+    assert result.changed_files == ["app.py"]
+    reviewer.assert_not_called()
+
+
+def test_scope_revision_preserves_primary_change_and_removes_grey_change(tmp_path):
+    init_repo(tmp_path)
+    (tmp_path / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "app"], cwd=tmp_path, check=True)
+    calls = []
+
+    def fake_coder(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            (tmp_path / "app.py").write_text("value = 2\n")
+            (tmp_path / "shared.py").write_text("unrelated = True\n")
+            return ["app.py", "shared.py"]
+        (tmp_path / "shared.py").unlink()
+        return ["shared.py"]
+
+    revision = ScopeReview(
+        decision="REVISE",
+        reason="The shared change is unrelated.",
+        preserve_paths=["app.py"],
+        remove_paths=["shared.py"],
+        instruction="Remove the shared change and keep the backend implementation.",
+    )
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=CommandResult(True, 0, "ok", ""),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.review_unexpected_scope",
+            return_value=revision,
+        ),
+    ):
+        result = execute_task_with_retries(
+            "Implement the service",
+            tmp_path,
+            ["pytest", "-q"],
+            primary_scope=["app.py"],
+            discouraged_scope=["shared.py"],
+        )
+
+    assert result.passed is True
+    assert result.accepted_attempt == 2
+    assert (tmp_path / "app.py").read_text() == "value = 2\n"
+    assert not (tmp_path / "shared.py").exists()
+
+
+def test_repeated_scope_revisions_rollback_then_use_fresh_retry(tmp_path):
+    init_repo(tmp_path)
+    (tmp_path / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "app"], cwd=tmp_path, check=True)
+    calls = []
+
+    def fake_coder(*args, **kwargs):
+        calls.append(True)
+        (tmp_path / "app.py").write_text(f"value = {len(calls) + 1}\n")
+        if len(calls) < 3:
+            (tmp_path / "shared.py").write_text("too broad\n")
+            return ["app.py", "shared.py"]
+        return ["app.py"]
+
+    revision = ScopeReview(
+        decision="REVISE",
+        reason="Narrow the change.",
+        preserve_paths=["app.py"],
+        remove_paths=["shared.py"],
+        instruction="Keep only the primary implementation.",
+    )
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=CommandResult(True, 0, "ok", ""),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.review_unexpected_scope",
+            side_effect=[revision, revision, revision],
+        ),
+    ):
+        result = execute_task_with_retries(
+            "Implement the service",
+            tmp_path,
+            ["pytest", "-q"],
+            retry_limit=2,
+            primary_scope=["app.py"],
+            discouraged_scope=["shared.py"],
+        )
+
+    assert result.passed is True
+    assert result.attempts == 4
+    assert len(calls) == 4
+    assert result.scope_reviews == [
+        revision.model_dump(mode="json"),
+        revision.model_dump(mode="json"),
+        revision.model_dump(mode="json"),
+    ]
+    assert not (tmp_path / "shared.py").exists()
+
+
+def test_forbidden_scope_rolls_back_and_fails_without_fallback(tmp_path):
+    init_repo(tmp_path)
+
+    def fake_coder(*args, **kwargs):
+        (tmp_path / ".env").write_text("TOKEN=secret\n")
+        return [".env"]
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ) as coder,
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+    ):
+        result = execute_task_with_retries(
+            "Implement the service",
+            tmp_path,
+            ["pytest", "-q"],
+            retry_limit=2,
+            primary_scope=["app.py"],
+            forbidden_scope=[".env"],
+        )
+
+    assert result.passed is False
+    assert result.operation_failures[-1]["failure_class"] == "forbidden_scope"
+    assert result.devstral_used is False
+    assert coder.call_count == 1
+    assert not (tmp_path / ".env").exists()
 
 
 def test_retries_after_failure(tmp_path):
@@ -600,6 +912,107 @@ def test_operation_failure_class_is_recorded_and_repeated_in_retry_prompt(tmp_pa
     assert rejected[0]["failure_class"] == "no_match"
     assert len(rejected[0]["detail"]) <= 2_000
     assert "OPERATION_FAILURE_CLASS: no_match" in prompts[1]
+
+
+def test_duplicate_path_schema_failure_gets_repair_guidance_without_diagnosis(tmp_path):
+    passed = CommandResult(True, 0, "ok", "")
+    prompts = []
+
+    def fake_coder(task, workspace_root, **kwargs):
+        prompts.append(task)
+        if len(prompts) == 1:
+            raise EditOperationError(
+                "Model returned invalid edit-operation schema: operations must not contain duplicate paths",
+                failure_class="invalid_schema",
+            )
+        return ["backend/main.py"]
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=passed,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.diagnose_failure",
+            return_value="irrelevant generic diagnosis",
+        ) as diagnose,
+    ):
+        result = execute_task_with_retries(
+            "Implement validation and search in backend/main.py",
+            tmp_path,
+            ["pytest", "-q"],
+            retry_limit=1,
+        )
+
+    assert result.passed is True
+    assert diagnose.call_count == 0
+    assert "operations must not contain duplicate paths" in prompts[1]
+    assert "Combine all changes to the same file into one operation" in prompts[1]
+    assert "Do not drop requested changes" in prompts[1]
+    assert "Exact-match validation remains required" in prompts[1]
+    assert "do not use fuzzy matching" in prompts[1]
+
+
+def test_duplicate_path_failure_is_given_to_fallback_without_generic_diagnosis(tmp_path):
+    passed = CommandResult(True, 0, "ok", "")
+    prompts = []
+
+    def fake_coder(task, workspace_root, **kwargs):
+        prompts.append((kwargs["coder"], task))
+        if kwargs["coder"] == "qwen_coder":
+            raise EditOperationError(
+                "Model returned invalid edit-operation schema: operations must not contain duplicate paths",
+                failure_class="invalid_schema",
+            )
+        return ["backend/main.py"]
+
+    with (
+        patch(
+            "local_agent_orchestrator.services.task_executor.execute_coding_task",
+            side_effect=fake_coder,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.run_tests",
+            return_value=passed,
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.prepare_verification_environment",
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.establish_baseline",
+            return_value=baseline_passed(),
+        ),
+        patch(
+            "local_agent_orchestrator.services.task_executor.diagnose_failure",
+            return_value="irrelevant generic diagnosis",
+        ) as diagnose,
+    ):
+        result = execute_task_with_retries(
+            "Implement validation and search in backend/main.py",
+            tmp_path,
+            ["pytest", "-q"],
+            retry_limit=0,
+        )
+
+    assert result.passed is True
+    assert result.devstral_used is True
+    assert diagnose.call_count == 0
+    fallback_prompt = prompts[-1][1]
+    assert prompts[-1][0] == "devstral"
+    assert "operations must not contain duplicate paths" in fallback_prompt
+    assert "Combine all changes to the same file into one operation" in fallback_prompt
+    assert "Exact-match validation remains required" in fallback_prompt
 
 
 def test_whitespace_failure_gets_precise_class_and_retry_guidance(tmp_path):

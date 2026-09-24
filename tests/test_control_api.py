@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import version
+import subprocess
 import threading
 from http.client import HTTPConnection
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 from local_agent_orchestrator.control_api import (
     ControlAPI,
@@ -12,6 +15,9 @@ from local_agent_orchestrator.control_api import (
 from local_agent_orchestrator.services.control_application import ControlApplication
 from local_agent_orchestrator.services.project_registry import ProjectRegistry
 from local_agent_orchestrator.models.task import RunState, TaskStatus
+from local_agent_orchestrator.models.plan import ExecutionPlan, PlanTask
+from local_agent_orchestrator.models.plan_intake import PlanIntakeResult
+from local_agent_orchestrator.models.project_spec import ProjectSpec
 
 
 class FakeService:
@@ -49,7 +55,7 @@ def test_health_and_loopback_default(tmp_path):
         assert server.server_address[0] == "127.0.0.1"
         status, _, content = request(server, "GET", "/api/health")
         assert status == 200
-        assert json.loads(content) == {"status": "ok"}
+        assert json.loads(content) == {"status": "ok", "version": version("local-agent-orchestrator")}
     finally:
         server.server_close()
 
@@ -236,6 +242,21 @@ def test_plan_list_routes_project_filter_to_application_service(tmp_path):
     assert json.loads(content) == [{"id": "plan-1", "project_id": "project-1"}]
 
 
+def test_source_plan_history_route_returns_grouped_history():
+    class Service:
+        def list_plan_history(self):
+            return [{"source_digest": "digest", "plan_ids": ["plan-1"]}]
+
+    api = ControlAPI(Service())
+    try:
+        status, _, content = api.handle("GET", "/api/plan-history", {})
+    finally:
+        api.close()
+
+    assert status == 200
+    assert json.loads(content) == [{"source_digest": "digest", "plan_ids": ["plan-1"]}]
+
+
 def test_project_update_and_delete_routes_preserve_workspace(tmp_path):
     repo = tmp_path / "repo"
     new_repo = tmp_path / "new-repo"
@@ -302,6 +323,201 @@ def test_project_update_route_rejects_shell_verifier(tmp_path):
         api.close()
     assert status == 400
     assert b"test_argv" in body
+
+
+def test_greenfield_project_eligibility_route_reports_authoritative_allowance(tmp_path):
+    app = ControlApplication(ProjectRegistry(tmp_path / "projects.json"))
+    imported = app.import_plan({"markdown": "# Bookmarks API\nBuild it."})
+    compiled = PlanIntakeResult(
+        status="compiled",
+        plan=ExecutionPlan(request="Build it", tasks=[PlanTask(description="Implement it")]),
+        project_spec=ProjectSpec(
+            name="Bookmarks API",
+            slug="bookmarks-api",
+            intent="new",
+            workspace_root="projects/bookmarks-api",
+            capabilities=["python", "fastapi", "pytest"],
+            bootstrap_profile="fastapi",
+            verifier=["uv", "run", "pytest", "-q"],
+        ),
+    )
+    with patch(
+        "local_agent_orchestrator.services.control_application.compile_markdown_plan",
+        return_value=compiled,
+    ):
+        app.compile_plan(imported["id"])
+
+    api = ControlAPI(app)
+    try:
+        status, _, body = api.handle(
+            "GET",
+            f"/api/plans/{imported['id']}/eligibility?compiled_revision=1",
+            {},
+        )
+        with patch(
+            "local_agent_orchestrator.services.project_bootstrap.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ):
+            create_status, _, created_body = api.handle(
+                "POST",
+                f"/api/plans/{imported['id']}/project",
+                {},
+                json.dumps({"compiled_revision": 1}).encode(),
+            )
+    finally:
+        api.close()
+
+    result = json.loads(body)
+    created = json.loads(created_body)
+    assert status == 200
+    assert result["eligible"] is True
+    assert result["reasons"] == []
+    assert result["compiled_revision"] == 1
+    assert create_status == 201
+    assert created["id"] == "bookmarks-api"
+    assert app.get_plan(imported["id"])["project_id"] == created["id"]
+
+
+def test_compiled_greenfield_flow_compiles_creates_and_starts_same_revision(tmp_path):
+    app = ControlApplication(ProjectRegistry(tmp_path / "projects.json"))
+    imported = app.import_plan({
+        "markdown": "# Local Bookmarks API\nBuild a CRUD FastAPI API with SQLite persistence and search."
+    })
+    rejected = PlanIntakeResult(
+        status="rejected",
+        unresolved_issues=[
+            "Research required: capability:crud — No trusted Workestra capability is registered for this request."
+        ],
+    )
+    with patch(
+        "local_agent_orchestrator.services.control_application.compile_markdown_plan",
+        return_value=rejected,
+    ):
+        app.compile_plan(imported["id"])
+    assert app.get_plan(imported["id"])["status"] == "rejected"
+
+    compiler = MagicMock()
+    compiler.__enter__.return_value = compiler
+    compiler.chat.return_value = json.dumps({
+        "request": "Build a local bookmarks API",
+        "project": {
+            "name": "Local Bookmarks API",
+            "intent": "new",
+            "language": "Python",
+            "framework": "FastAPI",
+            "database": "SQLite",
+            "project_type": "API",
+            "capabilities": [
+                "crud",
+                "CRUD",
+                "Persistence",
+                "Search",
+                "Python",
+                "FastAPI",
+                "SQLite",
+                "FastAPI TestClient",
+            ],
+        },
+        "tasks": [{"id": "implement", "description": "Implement the API", "kind": "code"}],
+    })
+    settings = MagicMock()
+    settings.resources.minimum_free_ram_gb = 1
+    settings.resources.minimum_free_vram_gb = 1
+    settings.orchestrator.model_start_timeout = 3
+    settings.orchestrator.model_stop_timeout = 2
+    model = MagicMock(
+        hf="local/bonsai",
+        context=4096,
+        binary="/bin/llama-server",
+        model_path="/models/bonsai.gguf",
+        flash_attention=True,
+        reasoning="high",
+    )
+    run_started = threading.Event()
+
+    def run_plan(**_kwargs):
+        run_started.set()
+
+    api = ControlAPI(app)
+    try:
+        with (
+            patch("local_agent_orchestrator.services.plan_intake.load_settings", return_value=settings),
+            patch("local_agent_orchestrator.services.plan_intake.load_models", return_value=MagicMock(models={"bonsai2": model})),
+            patch("local_agent_orchestrator.services.plan_intake.LlamaServer", return_value=compiler),
+        ):
+            compile_status, _, compile_body = api.handle(
+                "POST",
+                f"/api/plans/{imported['id']}/compile",
+                {},
+                json.dumps({"force": True}).encode(),
+            )
+
+        compiled = json.loads(compile_body)
+        revision = compiled["compiled_revision"]
+        assert compile_status == 200
+        assert compiled["status"] == "compiled"
+        assert compiled["unresolved_issues"] == []
+        assert not compiled["project_spec"]["research_requirements"]
+
+        eligibility_status, _, eligibility_body = api.handle(
+            "GET",
+            f"/api/plans/{imported['id']}/eligibility?compiled_revision={revision}",
+            {},
+        )
+        eligibility = json.loads(eligibility_body)
+        assert eligibility_status == 200
+        assert eligibility["eligible"] is True
+        assert eligibility["reasons"] == []
+
+        with patch(
+            "local_agent_orchestrator.services.project_bootstrap.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ):
+            create_status, _, create_body = api.handle(
+                "POST",
+                f"/api/plans/{imported['id']}/project",
+                {},
+                json.dumps({"compiled_revision": revision}).encode(),
+            )
+            retry_status, _, retry_body = api.handle(
+                "POST",
+                f"/api/plans/{imported['id']}/project",
+                {},
+                json.dumps({"compiled_revision": revision}).encode(),
+            )
+        created = json.loads(create_body)
+        retried = json.loads(retry_body)
+        assert create_status == 201
+        assert retry_status == 201
+        assert retried["id"] == created["id"]
+        assert len(app.list_projects()) == 1
+        assert created["id"] == "local-bookmarks-api"
+
+        target = tmp_path / "projects" / created["id"]
+        assert (target / "pyproject.toml").is_file()
+        with (
+            patch("local_agent_orchestrator.services.control_application.assert_verification_environment_supported"),
+            patch("local_agent_orchestrator.services.control_application.run_execution_plan", side_effect=run_plan) as runner,
+        ):
+            start_status, _, start_body = api.handle(
+                "POST",
+                "/api/runs",
+                {},
+                json.dumps({
+                    "project_id": created["id"],
+                    "plan_id": imported["id"],
+                    "compiled_revision": revision,
+                }).encode(),
+            )
+            assert run_started.wait(5)
+
+        assert start_status == 202
+        assert json.loads(start_body)["status"] == "accepted"
+        assert runner.call_args.kwargs["plan_id"] == imported["id"]
+        assert runner.call_args.kwargs["compiled_revision"] == revision
+        assert runner.call_args.kwargs["workspace_root"] == target.resolve()
+    finally:
+        api.close()
 
 
 def test_run_cleanup_route_removes_only_terminal_control_artifact(tmp_path):

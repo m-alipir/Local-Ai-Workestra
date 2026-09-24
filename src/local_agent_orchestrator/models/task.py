@@ -41,6 +41,11 @@ class RunState(BaseModel):
     current_task: str | None = None
     base_branch: str | None = None
     agent_branch: str | None = None
+    plan_id: str | None = None
+    compiled_revision: int | None = None
+    compiled_digest: str | None = None
+    source_digest: str | None = None
+    compiled_at: datetime | None = None
     tasks: list[TaskState] = Field(default_factory=list)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)

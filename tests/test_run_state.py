@@ -1,5 +1,10 @@
+import pytest
+
 from local_agent_orchestrator.models.task import TaskStatus
-from local_agent_orchestrator.services.run_state import RunStateManager
+from local_agent_orchestrator.services.run_state import (
+    ExecutionLeaseError,
+    RunStateManager,
+)
 
 
 def test_create_and_load_run(tmp_path):
@@ -15,6 +20,18 @@ def test_create_and_load_run(tmp_path):
     run_dir = manager.get_run_dir(state.run_id)
     assert (run_dir / "request.md").exists()
     assert (run_dir / "state.json").exists()
+
+
+def test_execution_lease_rejects_a_second_run_until_released(tmp_path):
+    manager = RunStateManager(tmp_path / "runs")
+    lease = manager.acquire_execution_lease("run-one")
+    try:
+        with pytest.raises(ExecutionLeaseError, match="run-one"):
+            manager.acquire_execution_lease("run-two")
+    finally:
+        manager.release_execution_lease(lease)
+
+    manager.acquire_execution_lease("run-two").release()
 
 
 def test_task_lifecycle(tmp_path):

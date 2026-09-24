@@ -9,3 +9,4 @@ resources:
 
 paths:
   runs: runs
+  projects_root: ~/Projeler

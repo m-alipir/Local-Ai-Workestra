@@ -4,6 +4,7 @@ import argparse
 import shlex
 
 from local_agent_orchestrator.control_api import create_server
+from local_agent_orchestrator.core.config import load_settings
 from local_agent_orchestrator.services.control_application import ControlApplication
 from local_agent_orchestrator.services.project_registry import ProjectRegistry
 from local_agent_orchestrator.services.resume import (
@@ -152,8 +153,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "serve":
         try:
+            settings = load_settings()
             application = ControlApplication(
-                ProjectRegistry(args.registry)
+                ProjectRegistry(args.registry, projects_root=settings.paths.projects_root)
             )
             server = create_server(
                 service=application,

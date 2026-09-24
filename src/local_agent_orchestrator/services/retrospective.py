@@ -19,6 +19,7 @@ _AUTHORITATIVE_EVENTS = {
     "checkpoint_failed",
     "task_completed",
 }
+_COMMENTARY_BUDGET = 4_000
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -75,6 +76,21 @@ def _compact_event(event: dict[str, Any]) -> dict[str, Any]:
             value = value[:600] + "...[truncated]"
         compact[key] = value
     return compact
+
+
+def _bounded_commentary(values: list[Any]) -> list[str]:
+    result: list[str] = []
+    remaining = _COMMENTARY_BUDGET
+    for value in values:
+        text = str(value)
+        if remaining <= 0:
+            break
+        if len(text) > remaining:
+            result.append(text[:remaining] + "...[truncated]")
+            break
+        result.append(text)
+        remaining -= len(text)
+    return result
 
 
 def _failure_attribution(metrics: dict[str, Any]) -> tuple[str, str | None]:
@@ -217,21 +233,21 @@ def build_retrospective_context(run_dir: str | Path) -> dict[str, Any]:
     ]
 
     commentary = {
-        "reviewer_diagnoses": [
+        "reviewer_diagnoses": _bounded_commentary([
             diagnosis
             for metric in metrics
             for diagnosis in metric.get("diagnoses", [])
-        ],
-        "security_reviews": [
+        ]),
+        "security_reviews": _bounded_commentary([
             metric.get("security_review")
             for metric in metrics
             if metric.get("security_review") is not None
-        ],
-        "optimization_reviews": [
+        ]),
+        "optimization_reviews": _bounded_commentary([
             metric.get("optimization_review")
             for metric in metrics
             if metric.get("optimization_review") is not None
-        ],
+        ]),
     }
 
     return {

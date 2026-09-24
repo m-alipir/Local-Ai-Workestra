@@ -33,6 +33,7 @@ class ResourceSettings(BaseModel):
 
 class PathSettings(BaseModel):
     runs: str = "runs"
+    projects_root: str = "~/Projeler"
 
 
 class Settings(BaseModel):

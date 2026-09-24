@@ -221,3 +221,16 @@ def prepare_verification_environment(
         stdout=process.stdout,
         stderr=process.stderr,
     )
+
+
+def assert_verification_environment_supported(
+    workspace_root: str | Path,
+    command: list[str],
+) -> None:
+    """Check start-time verifier support without changing the target."""
+
+    root = Path(workspace_root).resolve()
+    tool = _requested_tool(command)
+    if _target_tool_available(root, tool):
+        return
+    _metadata_bootstrap_command(root, tool)

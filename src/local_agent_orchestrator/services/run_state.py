@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
+from secrets import token_hex
 from uuid import uuid4
 
 from local_agent_orchestrator.models.task import (
@@ -15,12 +18,74 @@ from local_agent_orchestrator.models.trajectory import TrajectoryEvent
 from local_agent_orchestrator.services.trajectory import append_trajectory_event
 
 
+class ExecutionLeaseError(RuntimeError):
+    """Another run owns this project's workspace execution slot."""
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionLease:
+    path: Path
+    run_id: str
+    token: str
+
+    def release(self) -> None:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ExecutionLeaseError("Execution lease cannot be verified for release.") from exc
+        if value.get("run_id") != self.run_id or value.get("token") != self.token:
+            raise ExecutionLeaseError("Execution lease ownership changed before release.")
+        self.path.unlink()
+
+
 class RunStateManager:
     def __init__(self, runs_dir: str | Path = "runs") -> None:
         self.runs_dir = Path(runs_dir)
 
-    def create_run(self, request: str) -> RunState:
-        run_id = uuid4().hex[:12]
+    @staticmethod
+    def new_run_id() -> str:
+        return uuid4().hex[:12]
+
+    def assert_execution_available(self) -> None:
+        path = self.runs_dir / ".execution.lock"
+        if not path.exists():
+            return
+        try:
+            owner = json.loads(path.read_text(encoding="utf-8")).get("run_id")
+        except (OSError, json.JSONDecodeError):
+            owner = None
+        detail = f" for run {owner}" if isinstance(owner, str) else ""
+        raise ExecutionLeaseError("Project execution is already active" + detail + ".")
+
+    def acquire_execution_lease(self, run_id: str) -> ExecutionLease:
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
+        path = self.runs_dir / ".execution.lock"
+        token = token_hex(16)
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as exc:
+            self.assert_execution_available()
+            raise ExecutionLeaseError("Project execution lease could not be acquired.") from exc
+        try:
+            os.write(
+                descriptor,
+                json.dumps({"run_id": run_id, "token": token}).encode("utf-8"),
+            )
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        finally:
+            os.close(descriptor)
+        return ExecutionLease(path=path, run_id=run_id, token=token)
+
+    @staticmethod
+    def release_execution_lease(lease: ExecutionLease) -> None:
+        lease.release()
+
+    def create_run(self, request: str, *, run_id: str | None = None) -> RunState:
+        run_id = run_id or self.new_run_id()
         run_dir = self.runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from local_agent_orchestrator.core.config import load_settings
 from local_agent_orchestrator.models.plan import ExecutionPlan, PlanTask
@@ -230,16 +232,102 @@ def _waiting_result(
     )
 
 
+def finalize_plan_run(
+    state: RunState,
+    manager: RunStateManager,
+    passed: bool,
+    analytics_dir: str | Path,
+    *,
+    finalizer: Callable[..., FinalizationResult] = finalize_run,
+) -> tuple[bool, FinalizationResult | None]:
+    """Finalize after the same durable running state for new and resumed runs."""
+    run_dir = manager.get_run_dir(state.run_id)
+    state.status = TaskStatus.RUNNING
+    manager.save(state)
+    append_trajectory_event(
+        run_dir,
+        TrajectoryEvent(
+            run_id=state.run_id,
+            task_id=state.current_task or "run",
+            event="finalization_started",
+            passed=None,
+            detail="Analytics and retrospective finalization started.",
+        ),
+    )
+    try:
+        result = finalizer(
+            run_id=state.run_id,
+            run_dir=run_dir,
+            analytics_dir=analytics_dir,
+        )
+    except Exception as exc:
+        append_trajectory_event(
+            run_dir,
+            TrajectoryEvent(
+                run_id=state.run_id,
+                task_id=state.current_task or "run",
+                event="finalization_failed",
+                passed=False,
+                detail=str(exc),
+            ),
+        )
+        manager.finish_run(state, False)
+        return False, None
+    manager.finish_run(state, passed)
+    return passed, result
+
+
 def run_execution_plan(
     plan: ExecutionPlan,
     workspace_root: str | Path,
     test_command: list[str],
     runs_dir: str | Path | None = None,
     analytics_dir: str | Path = ".agent/analytics",
+    *,
+    plan_id: str | None = None,
+    compiled_revision: int | None = None,
+    compiled_digest: str | None = None,
+    source_digest: str | None = None,
+    compiled_at: datetime | None = None,
 ) -> PlanRunResult:
     settings = load_settings()
     manager = RunStateManager(runs_dir or settings.paths.runs)
-    state = manager.create_run(plan.request)
+    run_id = manager.new_run_id()
+    lease = manager.acquire_execution_lease(run_id)
+    try:
+        return _run_execution_plan(
+            plan, workspace_root, test_command, runs_dir, analytics_dir, run_id,
+            plan_id=plan_id, compiled_revision=compiled_revision,
+            compiled_digest=compiled_digest, source_digest=source_digest,
+            compiled_at=compiled_at,
+        )
+    finally:
+        manager.release_execution_lease(lease)
+
+
+def _run_execution_plan(
+    plan: ExecutionPlan,
+    workspace_root: str | Path,
+    test_command: list[str],
+    runs_dir: str | Path | None,
+    analytics_dir: str | Path,
+    run_id: str,
+    *,
+    plan_id: str | None = None,
+    compiled_revision: int | None = None,
+    compiled_digest: str | None = None,
+    source_digest: str | None = None,
+    compiled_at: datetime | None = None,
+) -> PlanRunResult:
+    settings = load_settings()
+    manager = RunStateManager(runs_dir or settings.paths.runs)
+    state = manager.create_run(plan.request, run_id=run_id)
+    state.plan_id = plan_id
+    state.compiled_revision = compiled_revision
+    state.compiled_digest = compiled_digest
+    state.source_digest = source_digest
+    state.compiled_at = compiled_at
+    manager.save(state)
 
     plan_path = manager.get_run_dir(state.run_id) / "plan.json"
     plan_path.write_text(
@@ -352,6 +440,9 @@ def run_execution_plan(
                 workspace_root=workspace_root,
                 test_command=test_command,
                 retry_limit=settings.orchestrator.task_retry_limit,
+                primary_scope=plan_task.primary_scope,
+                discouraged_scope=plan_task.discouraged_scope,
+                forbidden_scope=plan_task.forbidden_scope,
             )
             if result.commit:
                 commits.append(result.commit)
@@ -396,54 +487,14 @@ def run_execution_plan(
         completed_tasks += 1
 
     passed = passed and completed_tasks == len(plan.tasks)
-    run_dir = manager.get_run_dir(state.run_id)
-    # Task failures update the run status eagerly so dependency propagation is
-    # durable. Hide that intermediate terminal value while finalization owns
-    # model cleanup; terminal state is published only after it returns.
-    state.status = TaskStatus.RUNNING
-    manager.save(state)
-    append_trajectory_event(
-        run_dir,
-        TrajectoryEvent(
-            run_id=state.run_id,
-            task_id=state.current_task or "run",
-            event="finalization_started",
-            passed=None,
-            detail="Analytics and retrospective finalization started.",
-        ),
+    passed, finalization = finalize_plan_run(
+        state,
+        manager,
+        passed,
+        analytics_dir,
+        finalizer=finalize_run,
     )
-    try:
-        finalization: FinalizationResult = finalize_run(
-            run_id=state.run_id,
-            run_dir=run_dir,
-            analytics_dir=analytics_dir,
-        )
-    except Exception as exc:
-        append_trajectory_event(
-            run_dir,
-            TrajectoryEvent(
-                run_id=state.run_id,
-                task_id=state.current_task or "run",
-                event="finalization_failed",
-                passed=False,
-                detail=str(exc),
-            ),
-        )
-        manager.finish_run(state, False)
-        return PlanRunResult(
-            run_id=state.run_id,
-            passed=False,
-            completed_tasks=completed_tasks,
-            total_tasks=len(plan.tasks),
-            commits=commits,
-            run_dir=run_dir,
-            analytics_path=None,
-            retrospective_path=None,
-        )
-
-    # Publish terminal state only after analytics/retrospective generation and
-    # model cleanup have completed, so another run cannot overlap finalization.
-    manager.finish_run(state, passed)
+    run_dir = manager.get_run_dir(state.run_id)
 
     return PlanRunResult(
         run_id=state.run_id,
@@ -452,6 +503,6 @@ def run_execution_plan(
         total_tasks=len(plan.tasks),
         commits=commits,
         run_dir=run_dir,
-        analytics_path=finalization.analytics_path,
-        retrospective_path=finalization.retrospective_path,
+        analytics_path=finalization.analytics_path if finalization else None,
+        retrospective_path=finalization.retrospective_path if finalization else None,
     )

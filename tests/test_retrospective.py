@@ -111,6 +111,25 @@ def test_generate_retrospective(tmp_path):
     assert retrospective_class.call_args.kwargs["model"] == load_models().models["bonsai2"]
 
 
+def test_retrospective_prompt_bounds_untrusted_commentary(tmp_path):
+    _write_run(
+        tmp_path,
+        _metrics(diagnoses=["diagnosis-" + ("x" * 10_000)]),
+    )
+    fake = _fake_reviewer()
+
+    with patch(
+        "local_agent_orchestrator.services.retrospective.NemotronRetrospective",
+        return_value=fake,
+    ):
+        generate_retrospective(tmp_path)
+
+    prompt = fake.run.call_args.args[0]
+    assert len(prompt) < 20_000
+    assert "...[truncated]" in prompt
+    assert "x" * 10_000 not in prompt
+
+
 def test_successful_clean_run_does_not_invent_failure(tmp_path):
     _write_run(
         tmp_path,

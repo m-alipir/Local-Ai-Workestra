@@ -19,7 +19,7 @@
             <p class="muted intro">Plan, observe, and safely resume work across your local projects.</p>
           </div>
         </div>
-        <div class="health-block">
+        <div class="header-status">
           <span class="health-dot" aria-hidden="true" data-status="checking"></span>
           <span id="health" class="status" role="status" aria-live="polite" data-status="checking">Checking service…</span>
         </div>
@@ -32,7 +32,7 @@
         </div>
       </header>
 
-      <div class="workspace-grid">
+      <section class="workspace-grid" aria-label="Workspace context">
         <section class="card project-card" aria-labelledby="project-title">
           <div class="section-heading">
             <div>
@@ -43,14 +43,17 @@
           </div>
           <div class="field-row project-picker">
             <label for="project-select">Active project
-              <select id="project-select"><option value="">Loading…</option></select>
+              <select id="project-select"><option value="">New project from compiled plan</option></select>
             </label>
             <button id="refresh-projects" type="button" class="button-secondary">Refresh</button>
           </div>
+          <p class="muted management-note">For a new project, leave this set to “New project from compiled plan”. Import and compile to review its ProjectSpec, then use Create &amp; Start to bootstrap and start it.</p>
           <div class="row project-actions" aria-label="Selected project actions">
             <button id="edit-project" type="button" class="button-secondary" disabled>Edit project</button>
             <button id="delete-project" type="button" class="button-danger" disabled>Delete</button>
           </div>
+          <p id="project-eligibility" class="muted management-note" role="status" aria-live="polite">Compile a greenfield plan to check project creation eligibility.</p>
+          <button id="create-project" type="button" class="button-secondary" disabled>Create Project Only</button>
           <p class="muted management-note">Project changes affect future runs. Plans and local history remain available for reuse.</p>
           <form id="project-edit-form" class="management-form" data-mode="edit" aria-labelledby="project-edit-title" hidden>
             <h3 id="project-edit-title">Edit selected project</h3>
@@ -58,27 +61,56 @@
               <label>Name <input id="project-edit-name" autocomplete="off"></label>
               <label>Repository path <input id="project-edit-path" autocomplete="off"></label>
             </div>
-            <label>Verifier argv (JSON) <input id="project-edit-test-argv"></label>
+            <p id="project-edit-verifier" class="muted">Verifier: Workestra-managed trusted verifier (read-only)</p>
             <div class="row form-actions">
               <button type="submit">Save changes</button>
               <button id="cancel-project-edit" type="button" class="button-secondary">Cancel</button>
             </div>
           </form>
           <details id="add-project" class="add-project">
-            <summary><span>Add a project</span><span class="summary-hint">Register a trusted local repository</span></summary>
+            <summary><span>Register existing repository</span><span class="summary-hint">Existing project only</span></summary>
             <form id="project-form" class="form-stack" data-mode="create" aria-labelledby="project-create-title">
-              <h3 id="project-create-title">New project</h3>
+              <h3 id="project-create-title">Existing project registration</h3>
+              <p class="muted">Use this for a repository that already exists locally. New projects are created from a compiled ProjectSpec.</p>
               <div class="field-row">
-                <label>Name <input id="project-name" required autocomplete="off"></label>
+                <label>Project name <input id="project-name" required autocomplete="off"></label>
                 <label>Repository path <input id="project-path" required placeholder="/path/to/repository" autocomplete="off"></label>
               </div>
-              <label>Verifier argv (JSON) <input id="project-test-argv" value='["uv", "run", "pytest", "-q"]' required></label>
-              <button type="submit">Add project</button>
+              <p class="muted">Verifier: Workestra-managed trusted verifier</p>
+              <button type="submit">Register existing project</button>
             </form>
           </details>
           <p id="project-detail" class="muted project-detail"></p>
         </section>
 
+        <section class="card active-run-card" aria-labelledby="active-run-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">LIVE CONTEXT</p>
+              <h2 id="active-run-title">No active run</h2>
+            </div>
+            <span id="active-run-status" class="status" role="status" aria-live="polite" data-status="idle">Idle</span>
+          </div>
+          <p id="active-run-request" class="active-run-request muted">Start or select a run to keep its progress in view.</p>
+          <div class="active-run-metrics">
+            <div><span>Progress</span><strong id="active-run-progress">—</strong></div>
+            <div><span>Duration</span><strong id="active-run-duration">—</strong></div>
+            <div><span>Current task</span><strong id="active-run-task">—</strong></div>
+          </div>
+          <div class="active-run-footer">
+            <span id="active-run-meta" class="muted">The selected project has no run in focus.</span>
+            <button id="active-run-open" type="button" class="button-secondary" disabled>Open run</button>
+          </div>
+        </section>
+      </section>
+
+      <nav class="workbench-tabs" aria-label="Workspace views" role="tablist">
+        <button id="tab-plan" class="workbench-tab" type="button" role="tab" aria-selected="true" aria-controls="plan-workbench" data-workbench-tab="plan">Plan <span>Prepare and review</span></button>
+        <button id="tab-run" class="workbench-tab" type="button" role="tab" aria-selected="false" aria-controls="run-workbench" data-workbench-tab="run">Run <span>Live execution</span></button>
+        <button id="tab-history" class="workbench-tab" type="button" role="tab" aria-selected="false" aria-controls="history-workbench" data-workbench-tab="history">History <span>Runs and evidence</span></button>
+      </nav>
+
+      <section id="plan-workbench" class="workbench-panel" role="tabpanel" aria-labelledby="tab-plan">
         <section class="card plan-card" aria-labelledby="plan-title">
           <div class="section-heading">
             <div>
@@ -87,15 +119,19 @@
             </div>
             <span id="plan-status" class="status" role="status" aria-live="polite" data-status="idle">No plan selected</span>
           </div>
-          <p class="muted">Bring a Markdown plan into the trusted compiler, review its task graph, then start the approved run. Plans and history persist for reuse.</p>
-          <div class="plan-history-row">
-            <label for="plan-history">Saved plans
-              <select id="plan-history">
-                <option value="">No saved plans</option>
-              </select>
-            </label>
-            <button id="reuse-plan" type="button" class="button-secondary" disabled>Reuse plan</button>
-          </div>
+          <p class="muted plan-lede">Compile a Markdown plan, review its trusted task graph, then start the approved run. Plans and history persist for reuse.</p>
+          <details id="plan-history-panel" class="plan-history-panel">
+            <summary><span>Plan History</span><span class="summary-hint">Saved plans persist for reuse</span></summary>
+            <div class="plan-history-row">
+              <label for="plan-history">Saved plans
+                <select id="plan-history">
+                  <option value="">No saved plans</option>
+                </select>
+              </label>
+              <button id="reuse-plan" type="button" class="button-secondary" disabled>Reuse plan</button>
+            </div>
+            <div id="plan-history-details" class="muted management-note" aria-live="polite">No source plan selected.</div>
+          </details>
           <form id="plan-form" class="form-stack">
             <label for="plan-markdown">PLAN.md</label>
             <textarea id="plan-markdown" required placeholder="# Goal
@@ -103,93 +139,104 @@
 Describe the work in plain Markdown…"></textarea>
             <div class="row form-actions">
               <button type="submit">Import and compile</button>
-              <button id="start-run" type="button" class="button-primary" disabled>Start approved plan</button>
+              <button id="recompile-plan" type="button" class="button-secondary" hidden>Recompile selected plan</button>
+              <button id="start-run" type="button" class="button-primary" aria-describedby="start-plan-hint" disabled>Start</button>
             </div>
+            <p id="start-plan-hint" class="muted management-note" role="status" aria-live="polite">Import and compile a plan to enable its primary action.</p>
           </form>
           <section class="preview-panel" aria-labelledby="plan-preview-title">
             <div class="subsection-heading">
               <h3 id="plan-preview-title">Compiled preview</h3>
-              <span class="muted">Review before execution</span>
+              <span id="plan-revision" class="muted">Revision unavailable</span>
             </div>
             <div id="plan-preview" class="plan-preview" aria-live="polite">
               <p class="empty-state">No plan imported.</p>
             </div>
           </section>
         </section>
-      </div>
+      </section>
 
-      <section class="card runs-card" aria-labelledby="runs-title">
-        <div class="section-heading runs-heading">
-          <div>
-            <p class="section-kicker">03 · OBSERVE</p>
-            <h2 id="runs-title">Runs</h2>
+      <section id="run-workbench" class="workbench-panel" role="tabpanel" aria-labelledby="tab-run" hidden>
+        <section class="card runs-card" aria-labelledby="runs-title">
+          <div class="section-heading runs-heading">
+            <div>
+              <p class="section-kicker">03 · OBSERVE</p>
+              <h2 id="runs-title">Run workspace</h2>
+            </div>
+            <button id="refresh-runs" type="button" class="button-secondary">Refresh runs</button>
           </div>
-          <button id="refresh-runs" type="button" class="button-secondary">Refresh runs</button>
-        </div>
-        <div class="run-layout">
-          <aside class="run-list-pane" aria-labelledby="run-list-title">
-            <div class="subsection-heading">
-              <h3 id="run-list-title">Recent runs</h3>
-              <span class="muted">Select to inspect</span>
-            </div>
-            <div id="run-list" class="list" aria-live="polite">No runs.</div>
-          </aside>
-          <section id="run-detail" class="run-detail" aria-labelledby="run-heading" hidden>
-            <div class="run-detail-header">
-              <div>
-                <p class="section-kicker">RUN DETAIL</p>
-                <h3 id="run-heading"></h3>
-              </div>
-              <span id="run-status" class="badge" role="status" aria-live="polite" data-status="unknown"></span>
-            </div>
-            <section aria-labelledby="task-list-title">
+          <div class="run-layout">
+            <aside class="run-list-pane" aria-labelledby="run-list-title">
               <div class="subsection-heading">
-                <h4 id="task-list-title">Task progress</h4>
-                <span class="muted">Live execution state</span>
+                <h3 id="run-list-title">Recent runs</h3>
+                <span class="muted">Select to inspect</span>
               </div>
-              <div id="task-list" class="list task-list" role="list" aria-live="polite"></div>
-            </section>
-            <div class="row run-actions" aria-label="Run actions">
-              <button id="resume-run" type="button" disabled>Resume</button>
-              <button id="pause-run" type="button" class="button-secondary" disabled>Pause</button>
-              <button id="cancel-run" type="button" class="button-secondary" disabled>Cancel</button>
-              <button id="archive-run" type="button" class="button-secondary" disabled>Archive</button>
-              <button id="cleanup-run" type="button" class="button-danger" disabled>Clean up files</button>
-            </div>
-            <section class="evidence-section" aria-labelledby="timeline-title">
-              <div class="subsection-heading">
-                <h4 id="timeline-title">Timeline</h4>
-                <span class="muted">Raw run evidence</span>
+              <div id="run-list" class="list" aria-live="polite">No runs.</div>
+            </aside>
+            <section id="run-detail" class="run-detail" aria-labelledby="run-heading" hidden>
+              <div class="run-detail-header">
+                <div>
+                  <p class="section-kicker">RUN DETAIL</p>
+                  <h3 id="run-heading"></h3>
+                </div>
+                <span id="run-status" class="badge" role="status" aria-live="polite" data-status="unknown"></span>
               </div>
-              <pre id="timeline" class="output" aria-live="polite"></pre>
-            </section>
-            <section class="evidence-section" aria-labelledby="artifacts-title">
-              <div class="subsection-heading">
-                <h4 id="artifacts-title">Diff / results</h4>
-                <span class="muted">Artifacts and committed diff</span>
+              <section aria-labelledby="task-list-title">
+                <div class="subsection-heading">
+                  <h4 id="task-list-title">Task progress</h4>
+                  <span class="muted">Live execution state</span>
+                </div>
+                <div id="task-list" class="list task-list" role="list" aria-live="polite"></div>
+              </section>
+              <div class="run-actions" aria-label="Run actions">
+                <button id="resume-run" type="button" disabled>Resume</button>
+                <button id="pause-run" type="button" class="button-secondary" disabled>Pause</button>
+                <button id="cancel-run" type="button" class="button-secondary" disabled>Cancel</button>
+                <button id="archive-run" type="button" class="button-danger" disabled>Remove from history</button>
+                <button id="cleanup-run" type="button" class="button-secondary" disabled>Delete artifacts</button>
               </div>
-              <pre id="run-artifacts" class="output"></pre>
-            </section>
-            <section id="diagnostics" class="diagnostics" aria-labelledby="diagnostics-title" hidden>
-              <div class="subsection-heading">
-                <h4 id="diagnostics-title">Diagnostics</h4>
-                <span class="muted">Failure context</span>
-              </div>
-              <p id="diagnostic-summary" role="status"></p>
-              <details>
-                <summary>Raw run details</summary>
-                <pre id="diagnostic-details" class="output"></pre>
+              <p class="history-safety-note">Failed runs can leave normal history after confirmation. Their compact diagnostic archive stays under the project’s local <code>.archive</code> folder. Active and successful runs cannot be removed here.</p>
+              <details class="evidence-panel">
+                <summary><span>Timeline</span><span class="muted">Raw logs · closed by default</span></summary>
+                <pre id="timeline" class="output" aria-live="polite"></pre>
+              </details>
+              <details class="evidence-panel">
+                <summary><span>Artifacts and diff</span><span class="muted">Expandable evidence drawer</span></summary>
+                <pre id="run-artifacts" class="output"></pre>
+              </details>
+              <details id="diagnostics" class="diagnostics" aria-labelledby="diagnostics-title" hidden>
+                <summary id="diagnostics-title"><span>Diagnostics</span><span class="muted">Failure context · archived with the run</span></summary>
+                <p id="diagnostic-summary" role="status"></p>
+                <details>
+                  <summary>Raw diagnostic details</summary>
+                  <pre id="diagnostic-details" class="output"></pre>
+                </details>
               </details>
             </section>
-          </section>
-          <div class="run-empty" aria-live="polite">
-            <p class="empty-icon" aria-hidden="true">◎</p>
-            <h3>Choose a run to inspect</h3>
-            <p class="muted">Timeline, task progress, artifacts, and diagnostics will appear here.</p>
+            <div class="run-empty" aria-live="polite">
+              <p class="empty-icon" aria-hidden="true">◎</p>
+              <h3>Choose a run to inspect</h3>
+              <p class="muted">Timeline, task progress, artifacts, and diagnostics will appear here.</p>
+            </div>
           </div>
-        </div>
+        </section>
+      </section>
+
+      <section id="history-workbench" class="workbench-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
+        <section class="card history-card" aria-labelledby="history-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">04 · RETAIN</p>
+              <h2 id="history-title">Run History</h2>
+            </div>
+            <span id="history-count" class="status" data-status="idle">0 runs</span>
+          </div>
+          <p class="muted history-lede">A compact record of recent execution. Remove failed runs from this view without deleting their diagnostic evidence.</p>
+          <div id="history-list" class="history-grid" aria-live="polite">No runs.</div>
+        </section>
       </section>
     </main>
+    <span id="build-version" class="build-version" aria-label="Workestra build version">Build unavailable</span>
     <script type="module" src="/web/app.js"></script>
   </body>
 </html>

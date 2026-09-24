@@ -153,6 +153,21 @@ def test_new_file_trailing_whitespace_is_rejected_without_write(tmp_path):
     assert not (tmp_path / "tests" / "test_whitespace.py").exists()
 
 
+def test_forbidden_secret_path_is_rejected_before_candidate_write(tmp_path):
+    init_repo(tmp_path)
+
+    with pytest.raises(EditOperationError, match="forbidden"):
+        apply_edit_operations(
+            tmp_path,
+            response({
+                "kind": "create_file",
+                "path": "credentials.json",
+                "content": "{}\n",
+            }),
+            forbidden_scope=[],
+        )
+
+
 def test_create_existing_path_is_rejected_as_path_conflict(tmp_path):
     init_repo(tmp_path)
     (tmp_path / "app.py").write_text("value = 1\n")
@@ -335,6 +350,28 @@ def test_malformed_operation_response_is_rejected():
         )
 
     assert error.value.failure_class == "empty_old_text"
+
+
+def test_duplicate_operation_paths_are_rejected_with_the_path():
+    with pytest.raises(EditOperationError, match="duplicate paths: app.py") as error:
+        parse_edit_response(json.dumps({
+            "operations": [
+                {
+                    "kind": "replace_exact",
+                    "path": "app.py",
+                    "old_text": "one",
+                    "new_text": "two",
+                },
+                {
+                    "kind": "replace_exact",
+                    "path": "app.py",
+                    "old_text": "three",
+                    "new_text": "four",
+                },
+            ]
+        }))
+
+    assert error.value.failure_class == "invalid_schema"
 
 
 def test_operation_path_aliases_are_rejected(tmp_path):

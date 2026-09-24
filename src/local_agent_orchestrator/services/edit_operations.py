@@ -15,6 +15,7 @@ from local_agent_orchestrator.services.workspace import (
     Workspace,
     WorkspaceError,
 )
+from local_agent_orchestrator.services.task_scope import is_forbidden_path
 
 
 class EditOperationError(PatchError):
@@ -131,6 +132,7 @@ def _validate_operations(
     workspace: Workspace,
     response: EditOperationsResponse,
     grounded_paths: set[str],
+    forbidden_scope: set[str],
 ) -> dict[str, str | None]:
     candidate_contents: dict[str, str | None] = {}
     seen_resolved_paths: set[Path] = set()
@@ -138,6 +140,12 @@ def _validate_operations(
     for operation in response.operations:
         path = operation.path
         resolved = _validate_path(workspace, path)
+
+        if is_forbidden_path(path, forbidden_scope):
+            raise EditOperationError(
+                f"Edit path is forbidden by the safety boundary: {path}",
+                failure_class="forbidden_scope",
+            )
 
         if resolved in seen_resolved_paths:
             raise EditOperationError(
@@ -243,12 +251,14 @@ def _build_diff(
     workspace_root: Path,
     response: EditOperationsResponse,
     grounded_paths: set[str],
+    forbidden_scope: set[str],
 ) -> str:
     source_workspace = Workspace(workspace_root)
     candidate_contents = _validate_operations(
         source_workspace,
         response,
         grounded_paths,
+        forbidden_scope,
     )
 
     with tempfile.TemporaryDirectory(
@@ -337,6 +347,7 @@ def apply_edit_operations(
     response: EditOperationsResponse,
     *,
     grounded_paths: Iterable[str] | None = None,
+    forbidden_scope: Iterable[str] | None = None,
 ) -> list[str]:
     from local_agent_orchestrator.services.diff_patch import apply_unified_diff
 
@@ -348,7 +359,8 @@ def apply_edit_operations(
         )
 
     grounded = set(grounded_paths or ())
-    patch = _build_diff(root, response, grounded)
+    forbidden = set(forbidden_scope or ())
+    patch = _build_diff(root, response, grounded, forbidden)
 
     return apply_unified_diff(
         root,

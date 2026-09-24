@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import fcntl
+import json
+import os
 import subprocess
 import time
 from pathlib import Path
 
 import httpx
+import psutil
 
 from local_agent_orchestrator.services.resource_guard import (
     ResourceSnapshot,
@@ -21,6 +25,10 @@ class LlamaServerEmptyContentError(LlamaServerError):
     """The server completed without a textual assistant answer."""
 
 
+class LlamaServerBusyError(LlamaServerError):
+    """Another model process owns the local model resources."""
+
+
 class LlamaServer:
     def __init__(
         self,
@@ -35,6 +43,7 @@ class LlamaServer:
         start_timeout: int = 120,
         stop_timeout: int = 20,
         reasoning: str = "medium",
+        lock_path: str | Path | None = None,
     ) -> None:
         self.hf_model = hf_model
         self.context = context
@@ -49,9 +58,13 @@ class LlamaServer:
         self.start_timeout = start_timeout
         self.stop_timeout = stop_timeout
         self.reasoning = reasoning
+        cache_root = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser()
+        # ponytail: one model per user; split locks only if concurrent model serving becomes supported.
+        self.lock_path = Path(lock_path).expanduser() if lock_path else cache_root / "workestra/llama-server.lock"
 
         self.process: subprocess.Popen[str] | None = None
         self._baseline_resources: ResourceSnapshot | None = None
+        self._lock_file = None
 
     def _reasoning_args(self) -> list[str]:
         if self.reasoning == "none":
@@ -89,12 +102,13 @@ class LlamaServer:
         if self.process is not None and self.process.poll() is None:
             raise LlamaServerError("llama-server is already running.")
 
-        self._baseline_resources = assert_safe_to_start_model(
-            self.minimum_free_ram_gb,
-            self.minimum_free_vram_gb,
-        )
-
         try:
+            self._acquire_model_lock()
+            self._cleanup_stale_process()
+            self._baseline_resources = assert_safe_to_start_model(
+                self.minimum_free_ram_gb,
+                self.minimum_free_vram_gb,
+            )
             if not self.binary.exists():
                 raise LlamaServerError(
                     f"llama-server binary not found: {self.binary}"
@@ -133,6 +147,7 @@ class LlamaServer:
                 stderr=subprocess.DEVNULL,
                 text=True,
             )
+            self._write_lock_metadata(self.process.pid)
 
             deadline = time.monotonic() + self.start_timeout
 
@@ -167,6 +182,90 @@ class LlamaServer:
                     f"llama-server cleanup failed: {cleanup_exc}"
                 )
             raise
+
+    def _acquire_model_lock(self) -> None:
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = self.lock_path.open("a+")
+        deadline = time.monotonic() + self.start_timeout
+        while True:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._lock_file = lock_file
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    lock_file.close()
+                    raise LlamaServerBusyError(
+                        "Plan compiler is temporarily busy because another Workestra "
+                        "model process is active; retry shortly."
+                    )
+                time.sleep(0.1)
+
+    def _cleanup_stale_process(self) -> None:
+        lock_file = self._lock_file
+        if lock_file is None:
+            return
+        lock_file.seek(0)
+        try:
+            metadata = json.loads(lock_file.read() or "{}")
+        except (TypeError, ValueError):
+            self._clear_lock_metadata()
+            return
+        if not isinstance(metadata, dict):
+            self._clear_lock_metadata()
+            return
+        try:
+            pid = metadata.get("pid")
+            created = metadata.get("created")
+            executable = metadata.get("executable")
+            if not isinstance(pid, int) or not isinstance(created, (int, float)):
+                self._clear_lock_metadata()
+                return
+            try:
+                process = psutil.Process(pid)
+            except psutil.NoSuchProcess:
+                self._clear_lock_metadata()
+                return
+            if abs(process.create_time() - created) > 0.01:
+                self._clear_lock_metadata()
+                return
+            command = process.cmdline()
+            if not command or Path(command[0]).resolve() != Path(str(executable)).resolve():
+                self._clear_lock_metadata()
+                return
+            process.terminate()
+            try:
+                process.wait(timeout=self.stop_timeout)
+            except psutil.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=self.stop_timeout)
+        except (ValueError, OSError, psutil.AccessDenied, psutil.TimeoutExpired):
+            # Invalid, reused, inaccessible, or still-stuck PIDs are never force-killed.
+            return
+        self._clear_lock_metadata()
+
+    def _clear_lock_metadata(self) -> None:
+        if self._lock_file is not None:
+            self._lock_file.seek(0)
+            self._lock_file.truncate()
+            self._lock_file.flush()
+
+    def _write_lock_metadata(self, pid: int) -> None:
+        lock_file = self._lock_file
+        if lock_file is None:
+            return
+        process = psutil.Process(pid)
+        lock_file.seek(0)
+        lock_file.truncate()
+        json.dump({"pid": pid, "created": process.create_time(), "executable": str(self.binary.resolve())}, lock_file)
+        lock_file.flush()
+
+    def _release_model_lock(self) -> None:
+        lock_file = self._lock_file
+        self._lock_file = None
+        if lock_file is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
 
     def chat(
         self,
@@ -256,24 +355,29 @@ class LlamaServer:
         process = self.process
         self.process = None
 
-        if process is not None:
-            if process.poll() is None:
+        baseline = self._baseline_resources
+        self._baseline_resources = None
+        try:
+            if process is not None and process.poll() is None:
                 process.terminate()
-
                 try:
                     process.wait(timeout=self.stop_timeout)
                 except subprocess.TimeoutExpired:
                     process.kill()
-                    process.wait()
-
-        baseline = self._baseline_resources
-        self._baseline_resources = None
-
+                    try:
+                        process.wait(timeout=self.stop_timeout)
+                    except subprocess.TimeoutExpired as exc:
+                        raise LlamaServerBusyError(
+                            "Workestra llama-server is still exiting; retry after it releases model resources."
+                        ) from exc
+            if process is not None and self._lock_file is not None:
+                self._lock_file.seek(0)
+                self._lock_file.truncate()
+                self._lock_file.flush()
+        finally:
+            self._release_model_lock()
         if baseline is not None:
-            wait_for_model_release(
-                baseline=baseline,
-                timeout=self.stop_timeout,
-            )
+            wait_for_model_release(baseline=baseline, timeout=self.stop_timeout)
 
     def __enter__(self) -> LlamaServer:
         self.start()

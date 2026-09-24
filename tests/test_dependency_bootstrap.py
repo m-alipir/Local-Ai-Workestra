@@ -7,6 +7,7 @@ import pytest
 
 from local_agent_orchestrator.services.dependency_bootstrap import (
     VerificationBootstrapError,
+    assert_verification_environment_supported,
     prepare_verification_environment,
 )
 
@@ -64,6 +65,14 @@ def test_external_target_tool_symlink_is_not_reused(tmp_path):
 def test_target_without_venv_requires_supported_metadata(tmp_path):
     with pytest.raises(VerificationBootstrapError) as raised:
         prepare_verification_environment(tmp_path, ["pytest", "-q"])
+
+    assert raised.value.code == "missing_metadata"
+    assert not (tmp_path / ".venv").exists()
+
+
+def test_start_preflight_checks_metadata_without_mutating_target(tmp_path):
+    with pytest.raises(VerificationBootstrapError) as raised:
+        assert_verification_environment_supported(tmp_path, ["pytest", "-q"])
 
     assert raised.value.code == "missing_metadata"
     assert not (tmp_path / ".venv").exists()

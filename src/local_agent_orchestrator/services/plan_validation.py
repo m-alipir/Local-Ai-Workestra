@@ -73,6 +73,10 @@ def validate_plan(
 
     known_ids = set(effective_ids)
     indices = {task_id: index for index, task_id in enumerate(effective_ids)}
+    dependencies_by_id = {
+        effective_id: task.depends_on
+        for effective_id, task in zip(effective_ids, plan.tasks, strict=True)
+    }
     code_ids = {
         effective_id
         for effective_id, task in zip(
@@ -118,16 +122,25 @@ def validate_plan(
                     f"{effective_id} cannot depend on itself."
                 )
             dependents[dependency].append(index)
-        if (
-            task.kind == "test"
-            and code_ids
-            and not any(dependency in code_ids for dependency in dependencies)
-        ):
-            raise PlanValidationError(
-                f"Task {effective_id} is verifier-only and must depend on "
-                "at least one code task that creates or updates the files it "
-                "verifies."
-            )
+        if task.kind == "test" and code_ids:
+            pending = list(dependencies)
+            seen: set[str] = set()
+            has_code_prerequisite = False
+            while pending:
+                dependency = pending.pop()
+                if dependency in seen:
+                    continue
+                seen.add(dependency)
+                if dependency in code_ids:
+                    has_code_prerequisite = True
+                    break
+                pending.extend(dependencies_by_id[dependency])
+            if not has_code_prerequisite:
+                raise PlanValidationError(
+                    f"Task {effective_id} is verifier-only and must depend on "
+                    "at least one code task that creates or updates the files it "
+                    "verifies."
+                )
         indegree.append(len(dependencies))
 
     ready = [index for index, degree in enumerate(indegree) if degree == 0]

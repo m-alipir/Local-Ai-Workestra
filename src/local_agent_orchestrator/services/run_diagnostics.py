@@ -117,7 +117,7 @@ def _read_events(
     source_errors: list[str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     recent: deque[dict[str, Any]] = deque(maxlen=max_events)
-    verifier_details: deque[str] = deque(maxlen=max_events)
+    verifier_details: deque[dict[str, Any]] = deque(maxlen=max_events)
     model_errors: list[dict[str, Any]] = []
     checkpoint_failed = False
     checkpoint_created = False
@@ -160,10 +160,20 @@ def _read_events(
 
         event_name = str(event.get("event") or "unknown")
         detail = event.get("detail")
-        if isinstance(detail, str):
-            if "verification" in event_name or event_name in {"task_completed", "tests_finished"}:
-                if max_events:
-                    verifier_details.append(detail)
+        if (
+            isinstance(detail, str)
+            and event_name in {
+                "verification_baseline_failed",
+                "verification_baseline_finished",
+                "verification_finished",
+                "tests_finished",
+            }
+            and max_events
+        ):
+            verifier_details.append({
+                "task_id": event.get("task_id"),
+                "detail": detail,
+            })
         if _is_model_error(event_name, event) and len(model_errors) < max_events:
             model_errors.append(_compact_model_error(event, max_text_chars))
 
@@ -257,7 +267,7 @@ def _read_streams(text: str) -> tuple[str, str, int | None]:
 def _verifier_evidence(
     state: dict[str, Any],
     metrics: list[dict[str, Any]],
-    event_details: list[str],
+    event_details: list[dict[str, Any]],
     max_text_chars: int,
     task: dict[str, str] | None,
 ) -> dict[str, Any]:
@@ -266,19 +276,6 @@ def _verifier_evidence(
     raw_detail = ""
     returncode: int | None = None
     task_values = state.get("tasks", [])
-    if isinstance(task_values, list):
-        for task in task_values:
-            if isinstance(task, dict) and isinstance(task.get("error"), str):
-                raw_detail = task["error"]
-                task_stdout, task_stderr, task_returncode = _read_streams(task["error"])
-                stdout, stderr = task_stdout or stdout, task_stderr or stderr
-                if task_returncode is not None:
-                    returncode = task_returncode
-    for detail in event_details:
-        raw_detail = detail
-        event_stdout, event_stderr, event_returncode = _read_streams(detail)
-        stdout, stderr = event_stdout or stdout, event_stderr or stderr
-        returncode = event_returncode if event_returncode is not None else returncode
     metric = {}
     if task:
         metric = next(
@@ -291,7 +288,53 @@ def _verifier_evidence(
         )
     elif metrics:
         metric = metrics[-1]
-    if isinstance(metric.get("test_returncode"), int):
+
+    # A coding operation can fail before post-change verification. Its return
+    # code is not a verifier result even though older metrics stored it in the
+    # shared test_returncode field.
+    if (
+        metric.get("operation_failures")
+        and metric.get("verification_classification") is None
+    ):
+        return {
+            "returncode": None,
+            "stdout": "",
+            "stderr": "",
+            "classification": None,
+            "baseline_returncode": metric.get("baseline_returncode"),
+            "baseline_passed": metric.get("baseline_passed"),
+        }
+
+    selected_task = next(
+        (
+            value for value in task_values
+            if isinstance(value, dict)
+            and (task is None or value.get("id") == task.get("id"))
+        ),
+        None,
+    ) if isinstance(task_values, list) else None
+    if isinstance(selected_task, dict) and isinstance(selected_task.get("error"), str):
+        raw_detail = selected_task["error"]
+        task_stdout, task_stderr, task_returncode = _read_streams(raw_detail)
+        stdout, stderr = task_stdout or stdout, task_stderr or stderr
+        if task_returncode is not None:
+            returncode = task_returncode
+
+    for event in event_details:
+        event_task_id = event.get("task_id")
+        if task and event_task_id is not None and event_task_id != task.get("id"):
+            continue
+        detail = event.get("detail")
+        if not isinstance(detail, str):
+            continue
+        raw_detail = detail
+        event_stdout, event_stderr, event_returncode = _read_streams(detail)
+        stdout, stderr = event_stdout or stdout, event_stderr or stderr
+        returncode = event_returncode if event_returncode is not None else returncode
+    if (
+        isinstance(metric.get("test_returncode"), int)
+        and metric.get("verification_classification") is not None
+    ):
         returncode = metric["test_returncode"]
     if not stdout and not stderr and raw_detail:
         stderr = raw_detail
@@ -325,7 +368,23 @@ def _model_errors(
             if isinstance(failure.get("detail"), str):
                 item["detail"] = _clip(failure["detail"], max_text_chars)
             errors.append(item)
-    return errors[:max_events]
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for error in errors:
+        key = tuple(
+            error.get(field)
+            for field in (
+                "task_id",
+                "model",
+                "attempt",
+                "failure_class",
+                "detail",
+            )
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(error)
+    return unique[:max_events]
 
 
 def _checkpoint_state(

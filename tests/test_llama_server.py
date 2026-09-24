@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -5,6 +6,7 @@ import pytest
 
 from local_agent_orchestrator.adapters.llama_server import (
     LlamaServer,
+    LlamaServerBusyError,
     LlamaServerEmptyContentError,
     LlamaServerError,
 )
@@ -164,6 +166,7 @@ def test_stop_terminates_process():
     server = LlamaServer(hf_model="test/model")
 
     process = MagicMock()
+    process.pid = 1234
     process.poll.return_value = None
     server.process = process
 
@@ -207,6 +210,7 @@ def test_start_cleans_baseline_when_spawn_fails(
     server = LlamaServer(
         hf_model="test/model",
         binary=binary,
+        lock_path=tmp_path / "llama.lock",
     )
     baseline = ResourceSnapshot(
         available_ram_gb=8.0,
@@ -250,12 +254,14 @@ def test_start_uses_local_model_and_flash_attention(
     binary.touch()
     model.touch()
     process = MagicMock()
+    process.pid = 1234
     process.poll.return_value = None
     server = LlamaServer(
         hf_model="unused/model",
         binary=binary,
         model_path=model,
         flash_attention=True,
+        lock_path=tmp_path / "llama.lock",
     )
     baseline = ResourceSnapshot(
         available_ram_gb=8.0,
@@ -276,6 +282,10 @@ def test_start_uses_local_model_and_flash_attention(
             return_value=process,
         ) as popen,
         patch(
+            "local_agent_orchestrator.adapters.llama_server.psutil.Process",
+            return_value=MagicMock(create_time=MagicMock(return_value=1.0)),
+        ),
+        patch(
             "local_agent_orchestrator.adapters.llama_server.httpx.get",
             return_value=response,
         ),
@@ -291,6 +301,45 @@ def test_start_uses_local_model_and_flash_attention(
     assert command[3:5] == ["-ngl", "99"]
     assert "-fa" in command
     assert command[command.index("-fa") + 1] == "on"
+
+
+def test_start_waits_for_legitimate_workestra_model_lock(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    lock_path = tmp_path / "llama.lock"
+    owner = LlamaServer(hf_model="test/model", lock_path=lock_path)
+    waiting = LlamaServer(hf_model="test/model", lock_path=lock_path, start_timeout=0.01)
+    owner._acquire_model_lock()
+    try:
+        with pytest.raises(LlamaServerBusyError, match="temporarily busy"):
+            waiting.start()
+    finally:
+        owner._release_model_lock()
+
+
+def test_start_cleans_only_matching_stale_workestra_child(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    binary = tmp_path / "llama-server"
+    binary.touch()
+    lock_path = tmp_path / "llama.lock"
+    server = LlamaServer(hf_model="test/model", binary=binary, lock_path=lock_path)
+    lock_path.write_text(json.dumps({"pid": 1001, "created": 123.0, "executable": str(binary.resolve())}), encoding="utf-8")
+    stale = MagicMock()
+    stale.create_time.return_value = 123.0
+    stale.cmdline.return_value = [str(binary.resolve())]
+    spawned = MagicMock(pid=1002)
+    spawned.poll.return_value = None
+    baseline = ResourceSnapshot(8.0, [], 16.0, 2.0, 14.0)
+    with (
+        patch("local_agent_orchestrator.adapters.llama_server.psutil.Process", side_effect=[stale, MagicMock(create_time=MagicMock(return_value=124.0))]),
+        patch("local_agent_orchestrator.adapters.llama_server.assert_safe_to_start_model", return_value=baseline),
+        patch("local_agent_orchestrator.adapters.llama_server.subprocess.Popen", return_value=spawned),
+        patch("local_agent_orchestrator.adapters.llama_server.httpx.get", return_value=MagicMock(status_code=200)),
+        patch("local_agent_orchestrator.adapters.llama_server.wait_for_model_release"),
+    ):
+        server.start()
+        server.stop()
+    stale.terminate.assert_called_once()
+    assert lock_path.read_text(encoding="utf-8") == ""
 
 
 def test_context_manager_stops_after_body_failure():

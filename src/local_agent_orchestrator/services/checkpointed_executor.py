@@ -93,6 +93,57 @@ def _set_attempts(
             return
 
 
+def _fail_post_edit_review(
+    result: TaskExecutionResult,
+    exc: Exception,
+    *,
+    git: GitWorkspace,
+    state: RunState,
+    manager: RunStateManager,
+    task_id: str,
+) -> None:
+    error = f"Post-edit review failed: {type(exc).__name__}: {exc}"
+    result.passed = False
+    result.test_result = CommandResult(
+        passed=False,
+        returncode=125,
+        stdout=result.test_result.stdout,
+        stderr=error,
+    )
+    manager.update_task(state, task_id, TaskStatus.FAILED, error=error)
+    append_trajectory_event(
+        manager.get_run_dir(state.run_id),
+        TrajectoryEvent(
+            run_id=state.run_id,
+            task_id=task_id,
+            event="post_edit_review_failed",
+            passed=False,
+            detail=error,
+            failure_class="review_failure",
+        ),
+    )
+    try:
+        git.rollback()
+    except GitWorkspaceError as rollback_error:
+        manager.update_task(
+            state,
+            task_id,
+            TaskStatus.FAILED,
+            error=f"{error} Rollback failed: {rollback_error}",
+        )
+        return
+    append_trajectory_event(
+        manager.get_run_dir(state.run_id),
+        TrajectoryEvent(
+            run_id=state.run_id,
+            task_id=task_id,
+            event="rollback",
+            passed=True,
+            detail="Rolled back post-edit review failure.",
+        ),
+    )
+
+
 def execute_checkpointed_task(
     state: RunState,
     manager: RunStateManager,
@@ -102,6 +153,10 @@ def execute_checkpointed_task(
     test_command: list[str],
     retry_limit: int = 2,
     security_fix_limit: int = 1,
+    primary_scope: list[str] | None = None,
+    discouraged_scope: list[str] | None = None,
+    forbidden_scope: list[str] | None = None,
+    file_boundaries: list[str] | None = None,
 ) -> CheckpointedTaskResult:
     git = GitWorkspace(workspace_root)
     git.assert_clean()
@@ -122,6 +177,10 @@ def execute_checkpointed_task(
             workspace_root=workspace_root,
             test_command=test_command,
             retry_limit=retry_limit,
+            primary_scope=primary_scope,
+            discouraged_scope=discouraged_scope,
+            forbidden_scope=forbidden_scope,
+            file_boundaries=file_boundaries,
         )
     except Exception:
         git.rollback()
@@ -131,31 +190,58 @@ def execute_checkpointed_task(
         task_description,
         result.changed_files,
     ):
-        security_review = run_security_review(
-            task=task_description,
-            changed_files=result.changed_files,
-            workspace_root=workspace_root,
-        )
+        try:
+            security_review = run_security_review(
+                task=task_description,
+                changed_files=result.changed_files,
+                workspace_root=workspace_root,
+            )
+        except Exception as exc:
+            _fail_post_edit_review(
+                result,
+                exc,
+                git=git,
+                state=state,
+                manager=manager,
+                task_id=task_id,
+            )
 
         security_round = 0
 
         while (
-            security_review.has_blocking_findings
+            result.passed
+            and security_review is not None
+            and security_review.has_blocking_findings
             and security_round < security_fix_limit
         ):
             security_round += 1
 
-            fix_result = execute_task_with_retries(
-                task=_security_fix_prompt(
-                    task_description,
-                    security_review,
-                    workspace_root,
-                    result.changed_files,
-                ),
-                workspace_root=workspace_root,
-                test_command=test_command,
-                retry_limit=retry_limit,
-            )
+            try:
+                fix_result = execute_task_with_retries(
+                    task=_security_fix_prompt(
+                        task_description,
+                        security_review,
+                        workspace_root,
+                        result.changed_files,
+                    ),
+                    workspace_root=workspace_root,
+                    test_command=test_command,
+                    retry_limit=retry_limit,
+                    primary_scope=primary_scope,
+                    discouraged_scope=discouraged_scope,
+                    forbidden_scope=forbidden_scope,
+                    file_boundaries=file_boundaries,
+                )
+            except Exception as exc:
+                _fail_post_edit_review(
+                    result,
+                    exc,
+                    git=git,
+                    state=state,
+                    manager=manager,
+                    task_id=task_id,
+                )
+                break
 
             result.attempts += fix_result.attempts
             result.changed_files = list(
@@ -176,14 +262,26 @@ def execute_checkpointed_task(
                 )
                 break
 
-            security_review = run_security_review(
-                task=task_description,
-                changed_files=result.changed_files,
-                workspace_root=workspace_root,
-            )
+            try:
+                security_review = run_security_review(
+                    task=task_description,
+                    changed_files=result.changed_files,
+                    workspace_root=workspace_root,
+                )
+            except Exception as exc:
+                _fail_post_edit_review(
+                    result,
+                    exc,
+                    git=git,
+                    state=state,
+                    manager=manager,
+                    task_id=task_id,
+                )
+                break
 
         if (
             result.passed
+            and security_review is not None
             and security_review.has_blocking_findings
         ):
             result.passed = False
@@ -206,11 +304,21 @@ def execute_checkpointed_task(
         task_description,
         result.changed_files,
     ):
-        optimization_review = run_optimization_review(
-            task=task_description,
-            changed_files=result.changed_files,
-            workspace_root=workspace_root,
-        )
+        try:
+            optimization_review = run_optimization_review(
+                task=task_description,
+                changed_files=result.changed_files,
+                workspace_root=workspace_root,
+            )
+        except Exception as exc:
+            _fail_post_edit_review(
+                result,
+                exc,
+                git=git,
+                state=state,
+                manager=manager,
+                task_id=task_id,
+            )
 
     if result.passed:
         try:
@@ -290,6 +398,7 @@ def execute_checkpointed_task(
         accepted_model=result.accepted_model,
         accepted_attempt=result.accepted_attempt,
         operation_failures=result.operation_failures,
+        scope_reviews=result.scope_reviews,
         diagnosis_count=len(result.diagnoses),
         security_review_used=security_review is not None,
         optimization_review_used=optimization_review is not None,

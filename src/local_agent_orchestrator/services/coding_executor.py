@@ -45,6 +45,7 @@ SYSTEM_PROMPT = (
     "- Do not invent files, functions, APIs, or dependencies that were not observed.\n"
     "- For an existing file, use replace_exact with the exact old text observed in the evidence.\n"
     "- replace_exact must match exactly once; do not guess or use fuzzy matching.\n"
+    "- If several requested changes affect one file, combine them into that single operation; include any unchanged lines between edits in the exact old_text/new_text span.\n"
     "- For a new file, use create_file with its workspace-relative path and complete content.\n"
     "- Use delete_file only when the task explicitly requires deleting an observed file.\n"
     "- Use one operation per path.\n"
@@ -58,6 +59,7 @@ def execute_coding_task(
     coder: CoderName = "qwen_coder",
     context_callback: Callable[[str], None] | None = None,
     operation_callback: Callable[[list[dict]], None] | None = None,
+    forbidden_scope: list[str] | None = None,
 ) -> list[str]:
     settings = load_settings()
     models = load_models()
@@ -97,6 +99,13 @@ def execute_coding_task(
         + context.as_prompt()
     )
 
+    if forbidden_scope:
+        prompt += (
+            "\n\nFORBIDDEN TASK SCOPE:\n"
+            + "\n".join(f"- {path}" for path in forbidden_scope)
+            + "\nThese are hard safety boundaries. Never modify them."
+        )
+
     result = agent.run(prompt)
 
     operations = parse_edit_response(
@@ -113,4 +122,5 @@ def execute_coding_task(
         workspace_root,
         operations,
         grounded_paths=context.grounded_paths or None,
+        forbidden_scope=forbidden_scope,
     )

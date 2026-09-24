@@ -26,6 +26,7 @@ class TaskMetrics(BaseModel):
     operation_failures: list[dict[str, str | int]] = Field(
         default_factory=list,
     )
+    scope_reviews: list[dict[str, object]] = Field(default_factory=list)
     diagnosis_count: int = Field(default=0, ge=0)
     security_review_used: bool = False
     optimization_review_used: bool = False

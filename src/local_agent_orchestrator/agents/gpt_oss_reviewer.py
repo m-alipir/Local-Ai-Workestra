@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from local_agent_orchestrator.adapters.llama_server import LlamaServer
 from local_agent_orchestrator.models.config import ModelConfig
+from local_agent_orchestrator.models.scope import SCOPE_REVIEW_RESPONSE_FORMAT
 
 
 @dataclass(slots=True)
@@ -65,6 +66,55 @@ class GptOssReviewer:
                 system_prompt=system_prompt,
                 max_tokens=1536,
                 temperature=0.1,
+            )
+
+        return ReviewResult(content=content)
+
+    def review_scope(
+        self,
+        *,
+        task: str,
+        changed_files: list[str],
+        primary_scope: list[str],
+        discouraged_scope: list[str],
+        forbidden_scope: list[str],
+        diff_text: str,
+    ) -> ReviewResult:
+        system_prompt = (
+            "You are a focused task-scope reviewer. Return only the supplied "
+            "JSON schema. Review only the unexpected diff, using the task and "
+            "scope metadata as context. PASS keeps the current change. REVISE "
+            "keeps useful work and gives a concise repair instruction. "
+            "RETRY_FRESH requests a clean restart when the design is wrong or "
+            "repair is riskier. FAIL_HARD is only for unsafe or unverifiable "
+            "changes. Never invent files or approve forbidden paths."
+        )
+        prompt = (
+            f"TASK:\n{task}\n\n"
+            f"PRIMARY SCOPE:\n{primary_scope}\n\n"
+            f"DISCOURAGED SCOPE:\n{discouraged_scope}\n\n"
+            f"FORBIDDEN SCOPE:\n{forbidden_scope}\n\n"
+            f"ALL CHANGED FILES:\n{changed_files}\n\n"
+            f"FOCUSED UNEXPECTED DIFF:\n{diff_text}"
+        )
+
+        with LlamaServer(
+            hf_model=self.model.hf,
+            context=self.model.context,
+            minimum_free_ram_gb=self.minimum_free_ram_gb,
+            minimum_free_vram_gb=self.minimum_free_vram_gb,
+            start_timeout=self.start_timeout,
+            stop_timeout=self.stop_timeout,
+            reasoning=self.model.reasoning,
+        ) as server:
+            content = server.chat(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=1024,
+                temperature=0.1,
+                response_format=SCOPE_REVIEW_RESPONSE_FORMAT,
+                chat_template_kwargs={"enable_thinking": False},
+                require_content=True,
             )
 
         return ReviewResult(content=content)

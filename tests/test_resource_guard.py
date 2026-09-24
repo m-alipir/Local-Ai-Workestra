@@ -43,7 +43,7 @@ def test_guard_blocks_existing_llama_process():
         "local_agent_orchestrator.services.resource_guard.get_snapshot",
         return_value=snapshot,
     ):
-        with pytest.raises(ResourceGuardError):
+        with pytest.raises(ResourceGuardError, match="Another llama process is already running"):
             assert_safe_to_start_model(2.0, 1.0)
 
 

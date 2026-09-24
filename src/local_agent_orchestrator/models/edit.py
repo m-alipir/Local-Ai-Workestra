@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -142,8 +143,12 @@ class EditOperationsResponse(BaseModel):
     @model_validator(mode="after")
     def validate_unique_paths(self) -> EditOperationsResponse:
         paths = [operation.path for operation in self.operations]
-        if len(paths) != len(set(paths)):
+        duplicates = sorted(
+            path for path, count in Counter(paths).items() if count > 1
+        )
+        if duplicates:
             raise ValueError(
-                "operations must not contain duplicate paths"
+                "operations must not contain duplicate paths: "
+                + ", ".join(duplicates)
             )
         return self

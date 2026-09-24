@@ -1,9 +1,11 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from local_agent_orchestrator.adapters.llama_server import (
+    LlamaServerBusyError,
     LlamaServerEmptyContentError,
 )
 from local_agent_orchestrator.models.config import (
@@ -74,6 +76,20 @@ def _model_result() -> str:
 def test_validate_markdown_rejects_empty_untrusted_input():
     with pytest.raises(ValueError, match="Markdown cannot be empty"):
         validate_markdown("  \n")
+
+
+def test_compiler_reports_active_model_process_as_temporary_busy():
+    def busy_factory(**_kwargs):
+        raise LlamaServerBusyError("another Workestra model process is active; retry shortly")
+
+    with (
+        patch("local_agent_orchestrator.services.plan_intake.load_settings", return_value=_settings()),
+        patch("local_agent_orchestrator.services.plan_intake.load_models", return_value=MagicMock(models={"bonsai2": _bonsai()})),
+    ):
+        result = compile_plan("# A small feature", server_factory=busy_factory)
+
+    assert result.status == "failed"
+    assert result.error.startswith("Plan compiler temporarily busy:")
 
 
 def test_store_plan_markdown_writes_the_original_text(tmp_path):
@@ -174,6 +190,117 @@ def test_compile_plan_rejects_test_execution_without_code_prerequisite():
 
     assert result.status == "failed"
     assert "must depend on at least one code task" in (result.error or "")
+
+
+def test_compile_plan_accepts_verifier_with_transitive_code_prerequisite(tmp_path):
+    server = MagicMock()
+    server.__enter__.return_value = server
+    server.chat.return_value = json.dumps(
+        {
+            "request": "Build a local bookmarks API",
+            "project": {
+                "name": "Local Bookmarks API",
+                "intent": "new",
+                "language": "Python",
+                "framework": "FastAPI",
+                "database": "SQLite",
+                "project_type": "API",
+            },
+            "tasks": [
+                {
+                    "id": "task-001",
+                    "description": "Implement the bookmarks API and its tests.",
+                    "kind": "code",
+                },
+                {
+                    "id": "task-002",
+                    "description": "Write the local run instructions.",
+                    "kind": "docs",
+                    "depends_on": ["task-001"],
+                },
+                {
+                    "id": "task-003",
+                    "description": "Run the trusted test suite.",
+                    "kind": "test",
+                    "depends_on": ["task-002"],
+                },
+            ],
+        }
+    )
+
+    with (
+        patch("local_agent_orchestrator.services.plan_intake.load_settings", return_value=_settings()),
+        patch("local_agent_orchestrator.services.plan_intake.load_models", return_value=MagicMock(models={"bonsai2": _bonsai()})),
+        patch("local_agent_orchestrator.services.plan_intake.LlamaServer", return_value=server),
+    ):
+        result = compile_plan(
+            "# Local Bookmarks API\nBuild a FastAPI SQLite API.",
+            projects_root=tmp_path / "Projeler",
+        )
+
+    assert result.status == "compiled"
+    assert result.plan is not None
+    assert result.plan.tasks[-1].id == "task-003"
+    assert result.project_spec is not None
+    assert result.project_spec.workspace_root == str(tmp_path / "Projeler" / "local-bookmarks-api")
+
+
+def test_local_bookmarks_compiler_derives_full_suite_verifier_dependencies():
+    server = MagicMock()
+    server.__enter__.return_value = server
+    server.chat.return_value = json.dumps(
+        {
+            "request": "Build a local bookmarks API",
+            "project": {
+                "name": "Local Bookmarks API",
+                "intent": "new",
+                "language": "Python",
+                "framework": "FastAPI",
+                "database": "SQLite",
+                "project_type": "API",
+            },
+            "tasks": [
+                {
+                    "id": "task-001",
+                    "description": "Implement the FastAPI bookmarks service.",
+                    "kind": "code",
+                    "primary_scope": ["app/"],
+                },
+                {
+                    "id": "task-002",
+                    "description": "Create the endpoint and persistence tests.",
+                    "kind": "code",
+                    "primary_scope": ["tests/"],
+                    "depends_on": ["task-001"],
+                },
+                {
+                    "id": "task-003",
+                    "description": "Write the README with local run instructions.",
+                    "kind": "docs",
+                    "depends_on": ["task-002"],
+                },
+                {
+                    "id": "task-004",
+                    "description": "Run the trusted test suite.",
+                    "kind": "test",
+                },
+            ],
+        }
+    )
+
+    with (
+        patch("local_agent_orchestrator.services.plan_intake.load_settings", return_value=_settings()),
+        patch("local_agent_orchestrator.services.plan_intake.load_models", return_value=MagicMock(models={"bonsai2": _bonsai()})),
+        patch("local_agent_orchestrator.services.plan_intake.LlamaServer", return_value=server),
+    ):
+        result = compile_plan(
+            "# Local Bookmarks API\nBuild a FastAPI SQLite bookmarks service."
+        )
+
+    assert result.status == "compiled"
+    assert result.plan is not None
+    assert result.plan.tasks[-1].depends_on == ["task-001", "task-002"]
+    assert result.project_spec is not None
 
 
 def test_compile_plan_rejects_test_creation_misclassified_as_execution():
@@ -552,3 +679,108 @@ def test_compiler_commentary_does_not_trigger_unsafe_policy_false_positive():
         result = compile_plan("# Rough plan\nAdd a helper.")
 
     assert result.status == "compiled"
+
+
+def test_compiler_emits_fastapi_project_spec_for_greenfield_plan():
+    server = MagicMock()
+    server.__enter__.return_value = server
+    server.chat.return_value = json.dumps(
+        {
+            "request": "Build a bookmarks API",
+            "project": {
+                "name": "Bookmarks API",
+                "intent": "new",
+                "language": "Python",
+                "framework": "FastAPI",
+                "database": "SQLite",
+                "project_type": "API",
+            },
+            "tasks": [{"description": "Implement the API", "kind": "code"}],
+        }
+    )
+
+    with (
+        patch("local_agent_orchestrator.services.plan_intake.load_settings", return_value=_settings()),
+        patch("local_agent_orchestrator.services.plan_intake.load_models", return_value=MagicMock(models={"bonsai2": _bonsai()})),
+        patch("local_agent_orchestrator.services.plan_intake.LlamaServer", return_value=server),
+    ):
+        result = compile_plan("# Bookmarks API\nBuild a FastAPI SQLite API.")
+
+    assert result.status == "compiled"
+    assert result.project_spec is not None
+    assert result.project_spec.bootstrap_profile == "fastapi"
+    assert result.project_spec.workspace_root == str(Path.home() / "Projeler" / "bookmarks-api")
+
+
+def test_compiler_treats_crud_persistence_and_search_as_app_features_not_capabilities():
+    server = MagicMock()
+    server.__enter__.return_value = server
+    server.chat.return_value = json.dumps(
+        {
+            "request": "Build a local bookmarks API",
+            "project": {
+                "name": "Local Bookmarks API",
+                "intent": "new",
+                "language": "Python",
+                "framework": "FastAPI",
+                "database": "SQLite",
+                "capabilities": [
+                    "CRUD",
+                    "Persistence",
+                    "Search",
+                    "Python",
+                    "FastAPI",
+                    "SQLite",
+                    "FastAPI TestClient",
+                ],
+            },
+            "tasks": [{"description": "Implement bookmarks CRUD, persistence, and search", "kind": "code"}],
+        }
+    )
+
+    with (
+        patch("local_agent_orchestrator.services.plan_intake.load_settings", return_value=_settings()),
+        patch("local_agent_orchestrator.services.plan_intake.load_models", return_value=MagicMock(models={"bonsai2": _bonsai()})),
+        patch("local_agent_orchestrator.services.plan_intake.LlamaServer", return_value=server),
+    ):
+        result = compile_plan("# Local Bookmarks API\nImplement CRUD, SQLite persistence, and search.")
+
+    assert result.status == "compiled"
+    assert result.project_spec is not None
+    assert result.project_spec.bootstrap_profile == "fastapi"
+    assert {"python", "fastapi", "sqlite", "pytest", "api-testing", "sqlalchemy"} <= set(result.project_spec.capabilities)
+    assert not result.project_spec.research_requirements
+    assert not result.unresolved_issues
+    assert "application features such as CRUD, search, or" in server.chat.call_args.kwargs["prompt"]
+    assert "persistence in `capabilities`" in server.chat.call_args.kwargs["prompt"]
+
+
+def test_compiler_returns_project_spec_and_research_for_untrusted_frontend_stack():
+    server = MagicMock()
+    server.__enter__.return_value = server
+    server.chat.return_value = json.dumps(
+        {
+            "request": "Build a frontend",
+            "project": {
+                "name": "Bookmarks Web",
+                "intent": "new",
+                "language": "TypeScript",
+                "framework": "React",
+                "project_type": "frontend",
+            },
+            "tasks": [{"description": "Implement the frontend", "kind": "code"}],
+        }
+    )
+
+    with (
+        patch("local_agent_orchestrator.services.plan_intake.load_settings", return_value=_settings()),
+        patch("local_agent_orchestrator.services.plan_intake.load_models", return_value=MagicMock(models={"bonsai2": _bonsai()})),
+        patch("local_agent_orchestrator.services.plan_intake.LlamaServer", return_value=server),
+    ):
+        result = compile_plan("# Bookmarks Web\nBuild a React TypeScript frontend.")
+
+    assert result.status == "rejected"
+    assert result.plan is not None
+    assert result.project_spec is not None
+    assert result.project_spec.research_requirements
+    assert any("Node/TypeScript" in issue for issue in result.unresolved_issues)
